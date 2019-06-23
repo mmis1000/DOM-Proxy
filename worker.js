@@ -43,13 +43,69 @@ function main (callback) {
     })
 }
 
-main(function (send) {
-    const start = Date.now()
+var COMMANDS = {
+    GET_ROOT: 'GET_ROOT',
+    GET_PROPERTY: 'GET_PROPERTY',
+}
 
-    for (var i = 0; i < 1000; i++) {
-        const result = send('test message ' + i)
-        console.log('worker: response ' + result)
+var TYPES = {
+    NUMBER: 'NUMBER',
+    BOOLEAN: 'BOOLEAN',
+    STRING: 'STRING',
+    NULL: 'NULL',
+    UNDEFINED: 'UNDEFINED',
+    OBJECT: 'OBJECT'
+}
+
+main(function (send) {
+    // const start = Date.now()
+
+    // for (var i = 0; i < 1000; i++) {
+    //     const result = send('test message ' + i)
+    //     console.log('worker: response ' + result)
+    // }
+    // console.log('end', Date.now() - start, 'average', (Date.now() - start) / 1000)
+
+    function createProxy(refId) {
+        return new Proxy({}, {
+            get: function(target, prop, receiver) {
+                var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
+
+                switch (result.type) {
+                    case TYPES.NUMBER:
+                    case TYPES.BOOLEAN:
+                    case TYPES.STRING:
+                        return result.value
+                    case TYPES.NULL:
+                        return null
+                    case TYPES.UNDEFINED:
+                        return undefined
+                    case TYPES.OBJECT:
+                        return createProxy(result.ref)
+                }
+            }
+        })
     }
 
-    console.log('end', Date.now() - start, 'average', (Date.now() - start) / 1000)
+    function getRoot () {
+        var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_ROOT })))
+        return createProxy(result.ref)
+    }
+
+    var remoteWindow = getRoot()
+
+    console.log(remoteWindow.hostData.test.test2)
+    console.log(remoteWindow.location.href)
+
+    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_ROOT })))
+    // console.log(result)
+
+    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: result.ref, prop: 'hostData' })))
+    // console.log(result)
+
+    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: result.ref, prop: 'test' })))
+    // console.log(result)
+
+    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: result.ref, prop: 'test2' })))
+    // console.log(result)
 })

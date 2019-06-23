@@ -66,8 +66,64 @@ async function main (handler) {
     
 }
 
-main(async function handler (request) {
-    console.log('main: received requset ', request, Date.now())
-    // await new Promise(resolve => setTimeout(resolve, 10))
-    return '[Callback] ' + request
+var COMMANDS = {
+    GET_ROOT: 'GET_ROOT',
+    GET_PROPERTY: 'GET_PROPERTY',
+}
+
+const TYPES = {
+    NUMBER: 'NUMBER',
+    BOOLEAN: 'NUMBER',
+    STRING: 'STRING',
+    NULL: 'NULL',
+    UNDEFINED: 'UNDEFINED',
+    OBJECT: 'OBJECT'
+}
+
+let refId = 0
+const map = new Map()
+const backMap = new WeakMap()
+
+function format (item) {
+    if (item === null) {
+        return { type: TYPES.NULL }
+    } else if (item === undefined) {
+        return { type: TYPES.NULL }
+    } else {
+        switch (typeof item) {
+            case "boolean":
+                return { type: TYPES.BOOLEAN, value: item }
+            case "number": 
+                return { type: TYPES.NUMBER, value: item }
+            case "string": 
+                return { type: TYPES.STRING, value: item }
+            case "function":
+            case "object":
+                var id
+                if (!backMap.has(item)) {
+                    id = refId++
+                    map.set(id, item)
+                    backMap.set(item, id)
+                } else {
+                    id = backMap.get(item)
+                }
+
+                return { type: TYPES.OBJECT, ref: id }
+        }
+    }
+}
+
+main(function handler (requestText) {
+    var request = JSON.parse(requestText)
+
+    switch (request.command) {
+        case COMMANDS.GET_ROOT:
+            return JSON.stringify(format(window))
+        case COMMANDS.GET_PROPERTY:
+            var self = map.get(request.self)
+            var prop = request.prop
+            return JSON.stringify(format(self[prop]))
+    }
+
+    return '{"error":"not implement"}'
 })
