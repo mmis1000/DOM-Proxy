@@ -6,7 +6,7 @@ async function main (handler) {
     const int32 = new Int32Array(buffer);
     const dataView = new DataView(buffer)
 
-    const myWorker = new Worker("worker.js");
+    const myWorker = new Worker("worker.js?1");
     let id = 0
 
     const I32_PARENT_LOCK_INDEX = 0
@@ -69,6 +69,7 @@ async function main (handler) {
 var COMMANDS = {
     GET_ROOT: 'GET_ROOT',
     GET_PROPERTY: 'GET_PROPERTY',
+    UNREF: 'UNREF'
 }
 
 const TYPES = {
@@ -123,6 +124,9 @@ main(function handler (requestText) {
             var self = map.get(request.self)
             var prop = request.prop
             return JSON.stringify(format(self[prop]))
+        case COMMANDS.UNREF:
+            map.delete(request.ref)
+            return JSON.stringify({success: true})
     }
 
     return '{"error":"not implement"}'

@@ -1,6 +1,5 @@
 function main (callback) {
     self.addEventListener('message', function (event) {
-        console.log('recieve', event)
         var data = event.data
         var buffer = data.buffer
         var int32 = data.int32
@@ -46,6 +45,7 @@ function main (callback) {
 var COMMANDS = {
     GET_ROOT: 'GET_ROOT',
     GET_PROPERTY: 'GET_PROPERTY',
+    UNREF: 'UNREF'
 }
 
 var TYPES = {
@@ -57,17 +57,15 @@ var TYPES = {
     OBJECT: 'OBJECT'
 }
 
-main(function (send) {
-    // const start = Date.now()
+function registerUnref() {}
 
-    // for (var i = 0; i < 1000; i++) {
-    //     const result = send('test message ' + i)
-    //     console.log('worker: response ' + result)
-    // }
-    // console.log('end', Date.now() - start, 'average', (Date.now() - start) / 1000)
+main(function (send) {
+    var finalizerGroup = new FinalizationGroup(function (refId) {
+        send(JSON.stringify({ command: COMMANDS.UNREF, ref: refId }))
+    })
 
     function createProxy(refId) {
-        return new Proxy({}, {
+        var proxy = new Proxy({}, {
             get: function(target, prop, receiver) {
                 var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
 
@@ -85,6 +83,10 @@ main(function (send) {
                 }
             }
         })
+
+        finalizerGroup.register(proxy, refId, proxy)
+
+        return proxy
     }
 
     function getRoot () {
@@ -96,16 +98,4 @@ main(function (send) {
 
     console.log(remoteWindow.hostData.test.test2)
     console.log(remoteWindow.location.href)
-
-    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_ROOT })))
-    // console.log(result)
-
-    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: result.ref, prop: 'hostData' })))
-    // console.log(result)
-
-    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: result.ref, prop: 'test' })))
-    // console.log(result)
-
-    // var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: result.ref, prop: 'test2' })))
-    // console.log(result)
 })
