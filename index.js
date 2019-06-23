@@ -27,8 +27,7 @@ function parse(buffer, offset, length) {
 }
 
 function write(buffer, offset, text) {
-    var slice = buffer.slice(offset)
-    var encodedBuffer = encoder.encode(text, new Uint8Array(slice))
+    var encodedBuffer = encoder.encode(text)
     new Uint8Array(buffer).set(encodedBuffer, offset)
 
     return encodedBuffer.byteLength
@@ -51,6 +50,12 @@ async function main () {
 
     let old = 0;
 
+    async function handler (request) {
+        console.log('main: received requset ', text, Date.now())
+        // await new Promise(resolve => setTimeout(resolve, 10))
+        return '[Callback] ' + request
+    }
+
     while (true) {
 
         await Atomics.waitAsync(int32, I32_PARENT_LOCK_INDEX, old)
@@ -58,9 +63,7 @@ async function main () {
         var length = dataView.getUint32(I32_DATA_LENGTH_INDEX * 4)
         var text = parse(buffer, I32_DATA_INDEX * 4, length)
 
-        console.log('main: received requset ', text, Date.now())
-
-        var writeLength = write(buffer, I32_DATA_INDEX * 4, '[Callback] ' + text)
+        var writeLength = write(buffer, I32_DATA_INDEX * 4, await handler(text))
         dataView.setUint32(I32_DATA_LENGTH_INDEX * 4, writeLength)
 
         old = Atomics.load(int32, I32_PARENT_LOCK_INDEX)

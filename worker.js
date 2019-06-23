@@ -17,8 +17,7 @@ self.addEventListener('message', function (event) {
     }
 
     function write(buffer, offset, text) {
-        var slice = buffer.slice(offset)
-        var encodedBuffer = encoder.encode(text, new Uint8Array(slice))
+        var encodedBuffer = encoder.encode(text)
         new Uint8Array(buffer).set(encodedBuffer, offset)
 
         return encodedBuffer.byteLength
@@ -36,12 +35,14 @@ self.addEventListener('message', function (event) {
         var length = dataView.getUint32(constants.I32_DATA_LENGTH_INDEX * 4)
         var text = parse(buffer, constants.I32_DATA_INDEX * 4, length)
 
-        console.log('worker: response ' + text)
+        return text
     }
 
     const start = Date.now()
+
     for (var i = 0; i < 1000; i++) {
-        send('test message ' + i)
+        const result = send('test message ' + i)
+        console.log('worker: response ' + result)
     }
 
     console.log('end', Date.now() - start, 'average', (Date.now() - start) / 1000)
