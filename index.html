@@ -17,7 +17,7 @@
     <script src="await-async.js"></script>
     <script src="dom-proxy.js"></script>
     <script>
-        var payload = DOMProxy.createHOST()
+        var payload = DOMProxy.createHost()
         const myWorker = new Worker("worker.js");
         myWorker.postMessage(payload)
     </script>

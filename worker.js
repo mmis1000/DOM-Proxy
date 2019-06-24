@@ -1,8 +1,8 @@
 importScripts('dom-proxy.js')
 
 self.addEventListener('message', function (event) {
-    var data = event.data
-    var remoteWindow = DOMProxy.createProxy(data)
+    var payload = event.data
+    var remoteWindow = DOMProxy.createProxy(payload)
 
     console.log(remoteWindow.hostData.test.test2)
     console.log(remoteWindow.location.href)

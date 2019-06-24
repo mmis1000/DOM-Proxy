@@ -39,7 +39,7 @@ var global = typeof window !== 'undefined' ? window : self;
             COMMANDS,
             TYPES
         },
-        createHOST () {
+        createHost () {
             /**
              * @type {ArrayBuffer}
              */
