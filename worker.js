@@ -18,4 +18,6 @@ self.addEventListener('message', function (event) {
     var el = remoteWindow.document.createElement('div')
     el.innerHTML = 'test'
     remoteWindow.document.body.appendChild(el)
+
+    console.log(remoteWindow.document.body.innerHTML)
 })
