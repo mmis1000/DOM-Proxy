@@ -6,6 +6,8 @@ self.addEventListener('message', function (event) {
 
     console.log(remoteWindow.hostData.test.test2)
     console.log(remoteWindow.location.href)
+    console.log(remoteWindow.document.title)
+    console.log(remoteWindow.document === remoteWindow.document)
     console.log(Object.keys(remoteWindow))
     console.log(Object.getOwnPropertyNames(remoteWindow.location))
     for (let key of Object.getOwnPropertyNames(remoteWindow.location)) {

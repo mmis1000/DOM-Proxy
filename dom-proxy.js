@@ -207,12 +207,18 @@ var global = typeof window !== 'undefined' ? window : self;
                 return text
             }
         
+            const proxies = new Map()
             
-            var finalizerGroup = new FinalizationGroup(function (refId) {
+            const finalizerGroup = new FinalizationGroup(function (refId) {
+                proxies.delete(refId)
                 send(JSON.stringify({ command: COMMANDS.UNREF, ref: refId }))
             })
 
             function createProxy(refId) {
+                if (proxies.has(refId)) {
+                    return proxies.get(refId).deref()
+                }
+
                 var proxy = new Proxy({}, {
                     get: function(target, prop, receiver) {
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
@@ -242,6 +248,7 @@ var global = typeof window !== 'undefined' ? window : self;
                 })
 
                 finalizerGroup.register(proxy, refId, proxy)
+                proxies.set(refId, new WeakRef(proxy))
 
                 return proxy
             }
