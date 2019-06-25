@@ -242,8 +242,7 @@ var global = typeof window !== 'undefined' ? window : self;
                     },
                     getOwnPropertyDescriptor(target, prop) {
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_OWN_PROPERTY_DESCRIPTOR, self: refId, prop })))
-                        Reflect.defineProperty(target, prop, result);
-                        return result
+                        return Object.assign(result, { configurable: true })
                     }
                 })
 
