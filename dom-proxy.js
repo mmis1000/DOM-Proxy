@@ -166,7 +166,7 @@ var global = typeof window !== 'undefined' ? window : self;
                         delete desc.set
                         return JSON.stringify(desc)
                     case COMMANDS.UNREF:
-                        var self = map.get(request.self)
+                        var self = map.get(request.ref)
                         map.delete(request.ref)
                         backMap.delete(self)
                         return JSON.stringify({ success: true })
