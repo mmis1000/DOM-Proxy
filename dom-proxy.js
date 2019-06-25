@@ -208,11 +208,15 @@ var global = typeof window !== 'undefined' ? window : self;
             }
         
             const proxies = new Map()
-            
-            const finalizerGroup = new FinalizationGroup(function (refId) {
-                proxies.delete(refId)
-                send(JSON.stringify({ command: COMMANDS.UNREF, ref: refId }))
-            })
+
+            function createCleaner() {
+                return new FinalizationGroup(function (refIds) {
+                    for (let refId of refIds) {
+                        proxies.delete(refId)
+                        send(JSON.stringify({ command: COMMANDS.UNREF, ref: refId }))
+                    }
+                })
+            }
 
             function createProxy(refId) {
                 if (proxies.has(refId)) {
@@ -246,6 +250,7 @@ var global = typeof window !== 'undefined' ? window : self;
                     }
                 })
 
+                const finalizerGroup = createCleaner()
                 finalizerGroup.register(proxy, refId, proxy)
                 proxies.set(refId, new WeakRef(proxy))
 
