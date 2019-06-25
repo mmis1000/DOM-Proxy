@@ -28,8 +28,29 @@ var global = typeof window !== 'undefined' ? window : self;
         OBJECT: 'OBJECT'
     }
 
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    /**
+     * @param {ArrayBuffer} buffer
+     */
+    function parse(buffer, offset, length) {
+        var slice = buffer.slice(offset, offset + length)
+        var text = decoder.decode(new Uint8Array(new Uint8Array(slice)))
+        return text
+    }
+
+    function write(buffer, offset, text) {
+        var encodedBuffer = encoder.encode(text)
+        new Uint8Array(buffer).set(encodedBuffer, offset)
+
+        return encodedBuffer.byteLength
+    }
 
     var DOMProxy = global.DOMProxy = {
+        utils: {
+            parse,
+            write
+        },
         gcGroups,
         constants: {
             OFFSETS: {
@@ -53,26 +74,6 @@ var global = typeof window !== 'undefined' ? window : self;
             const dataView = new DataView(buffer)
 
             let id = 0
-
-
-            const decoder = new TextDecoder()
-            const encoder = new TextEncoder()
-
-            /**
-             * @param {ArrayBuffer} buffer
-             */
-            function parse(buffer, offset, length) {
-                var slice = buffer.slice(offset, offset + length)
-                var text = decoder.decode(new Uint8Array(new Uint8Array(slice)))
-                return text
-            }
-
-            function write(buffer, offset, text) {
-                var encodedBuffer = encoder.encode(text)
-                new Uint8Array(buffer).set(encodedBuffer, offset)
-
-                return encodedBuffer.byteLength
-            }
 
             const payload = {
                 constants: {
@@ -110,6 +111,8 @@ var global = typeof window !== 'undefined' ? window : self;
             let refId = 0
             const map = new Map()
             const backMap = new WeakMap()
+
+            console.debug(map, backMap)
 
             function format(item) {
                 if (item === null) {
@@ -163,7 +166,9 @@ var global = typeof window !== 'undefined' ? window : self;
                         delete desc.set
                         return JSON.stringify(desc)
                     case COMMANDS.UNREF:
+                        var self = map.get(request.self)
                         map.delete(request.ref)
+                        backMap.delete(self)
                         return JSON.stringify({ success: true })
                 }
 
@@ -181,22 +186,6 @@ var global = typeof window !== 'undefined' ? window : self;
             var constants = data.constants
             var dataView = data.dataView
             let id = 0
-
-            const decoder = new TextDecoder()
-            const encoder = new TextEncoder()
-
-            function parse(buffer, offset, length) {
-                var slice = buffer.slice(offset, offset + length)
-                var text = decoder.decode(new Uint8Array(new Uint8Array(slice)))
-                return text
-            }
-
-            function write(buffer, offset, text) {
-                var encodedBuffer = encoder.encode(text)
-                new Uint8Array(buffer).set(encodedBuffer, offset)
-
-                return encodedBuffer.byteLength
-            }
 
             var send = (text) => {
                 var length = write(buffer, constants.I32_DATA_INDEX * 4, text)
