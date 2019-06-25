@@ -11,7 +11,7 @@ self.addEventListener('message', function (event) {
     console.log('Host window keys: ', Object.keys(remoteWindow))
     console.log('Host location keys: ', Object.getOwnPropertyNames(remoteWindow.location))
     for (let key of Object.getOwnPropertyNames(remoteWindow.location)) {
-        console.log('Host location property: ', key, remoteWindow.location[key])
+        console.log('Host location property: ', key, typeof remoteWindow.location[key] === 'string' ? remoteWindow.location[key]: '(object ommited)')
     }
     self.remoteWindow = remoteWindow
 })
