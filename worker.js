@@ -16,10 +16,16 @@ self.addEventListener('message', function (event) {
     self.remoteWindow = remoteWindow
 
     var el = remoteWindow.document.createElement('div')
-    el.innerHTML = 'test'
+    el.innerHTML = 'You have been hacked from web worker lol'
     remoteWindow.document.body.appendChild(el)
 
     console.log(remoteWindow.document.body.innerHTML)
     remoteWindow.a = new (remoteWindow.Object)()
     remoteWindow.eval('console.log(a)')
+    var func = new remoteWindow.Function('el', `
+        el.addEventListener('click', () => alert('LOLLLL'))
+    `)
+
+    func(el)
+
 })
