@@ -20,4 +20,6 @@ self.addEventListener('message', function (event) {
     remoteWindow.document.body.appendChild(el)
 
     console.log(remoteWindow.document.body.innerHTML)
+    remoteWindow.a = new (remoteWindow.Object)()
+    remoteWindow.eval('console.log(a)')
 })

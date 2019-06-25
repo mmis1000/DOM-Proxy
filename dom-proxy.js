@@ -325,7 +325,7 @@ var global = typeof window !== 'undefined' ? window : self;
                     return proxies.get(refId).deref()
                 }
 
-                var proxy = new Proxy(type === TYPES.FUNCTION ? () => {} : {}, {
+                var proxy = new Proxy(type === TYPES.FUNCTION ? function () {} : {}, {
                     get: function (target, prop, receiver) {
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
                         return constructProxiedValue(result, createProxy)
@@ -374,7 +374,6 @@ var global = typeof window !== 'undefined' ? window : self;
                         }
 
                         var result = JSON.parse(send(JSON.stringify(request)))
-
                         return constructProxiedValue(result, createProxy)
                     }
                 })
