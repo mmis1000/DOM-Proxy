@@ -1,10 +1,10 @@
 # WebWorker DOM Proxy (POC)
 Transparent rpc between web worker and browser main context
 
-## Requirements:
+## Requirements (as of 2019/06/25):
 1. Atomics.waitAsync (stage2)
 2. WeakRef (stage3)
-3. FinalizationGroup (stage3)
+3. FinalizationGroup (stage2)
 
 ## Usage
 

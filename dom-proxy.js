@@ -1,6 +1,7 @@
 var global = typeof window !== 'undefined' ? window : self;
 
 {
+    // We need this because the `FinalizationGroup` can't keep itself alive somehow
     const gcGroups =  new Set()
 
     const I32_PARENT_LOCK_INDEX = 0
