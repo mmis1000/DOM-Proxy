@@ -16,6 +16,9 @@ var global = typeof window !== 'undefined' ? window : self;
         GET_PROPERTY: 'GET_PROPERTY',
         GET_OWN_KEYS: 'GET_OWN_KEYS',
         GET_OWN_PROPERTY_DESCRIPTOR: 'GET_OWN_PROPERTY_DESCRIPTOR',
+        SET_PROPERTY: 'SET_PROPERTY',
+        APPLY: 'APPLY',
+        CONSTRUCT: 'CONSTRUCT',
         UNREF: 'UNREF'
     }
 
@@ -25,7 +28,8 @@ var global = typeof window !== 'undefined' ? window : self;
         STRING: 'STRING',
         NULL: 'NULL',
         UNDEFINED: 'UNDEFINED',
-        OBJECT: 'OBJECT'
+        OBJECT: 'OBJECT',
+        FUNCTION: 'FUNCTION'
     }
 
     const decoder = new TextDecoder()
@@ -44,6 +48,107 @@ var global = typeof window !== 'undefined' ? window : self;
         new Uint8Array(buffer).set(encodedBuffer, offset)
 
         return encodedBuffer.byteLength
+    }
+
+    let refId = 0
+
+    function destructValue(value, refMap, backMap) {
+        if (value === null) {
+            return { type: TYPES.NULL }
+        } else if (value === undefined) {
+            return { type: TYPES.UNDEFINED }
+        } else {
+            switch (typeof value) {
+                case "boolean":
+                    return { type: TYPES.BOOLEAN, value: value }
+                case "number":
+                    return { type: TYPES.NUMBER, value: value }
+                case "string":
+                    return { type: TYPES.STRING, value: value }
+                case "function":
+                case "object":
+                    var id
+                    if (!backMap.has(value)) {
+                        id = refId++
+                        refMap.set(id, value)
+                        backMap.set(value, id)
+                    } else {
+                        id = backMap.get(value)
+                    }
+
+                    if (typeof value === 'function') {
+                        return { type: TYPES.FUNCTION, ref: id }
+                    } else {
+                        return { type: TYPES.OBJECT, ref: id }
+                    }
+            }
+        }
+    }
+
+    function constructValue(result, refMap, backMap) {
+        switch (result.type) {
+            case TYPES.NUMBER:
+            case TYPES.BOOLEAN:
+            case TYPES.STRING:
+                return result.value
+            case TYPES.NULL:
+                return null
+            case TYPES.UNDEFINED:
+                return undefined
+            case TYPES.OBJECT:
+                return refMap.get(result.ref)
+            case TYPES.FUNCTION:
+                return refMap.get(result.ref)
+        }
+    }
+
+    function constructProxiedValue(result, createProxy) {
+        switch (result.type) {
+            case TYPES.NUMBER:
+            case TYPES.BOOLEAN:
+            case TYPES.STRING:
+                return result.value
+            case TYPES.NULL:
+                return null
+            case TYPES.UNDEFINED:
+                return undefined
+            case TYPES.OBJECT:
+                return createProxy(result.ref)
+            case TYPES.FUNCTION:
+                return createProxy(result.ref, TYPES.FUNCTION)
+        }
+    }
+
+    function destructProxiedValue(value, idMap) {
+        if (value === null) {
+            return { type: TYPES.NULL }
+        } else if (value === undefined) {
+            return { type: TYPES.UNDEFINED }
+        } else {
+            switch (typeof value) {
+                case "boolean":
+                    return { type: TYPES.BOOLEAN, value }
+                case "number":
+                    return { type: TYPES.NUMBER, value }
+                case "string":
+                    return { type: TYPES.STRING, value }
+                case "function":
+                case "object":
+                    var id
+
+                    if (!idMap.has(value)) {
+                        throw new TypeError('context error, not a proxied object')
+                    }
+                    
+                    id = idMap.get(value)
+                    
+                    if (typeof value === 'function') {
+                        return { type: TYPES.FUNCTION, ref: id }
+                    } else {
+                        return { type: TYPES.OBJECT, ref: id }
+                    }
+            }
+        }
     }
 
     var DOMProxy = global.DOMProxy = {
@@ -108,39 +213,16 @@ var global = typeof window !== 'undefined' ? window : self;
 
             }
 
-            let refId = 0
             const map = new Map()
             const backMap = new WeakMap()
 
             console.debug(map, backMap)
 
             function format(item) {
-                if (item === null) {
-                    return { type: TYPES.NULL }
-                } else if (item === undefined) {
-                    return { type: TYPES.UNDEFINED }
-                } else {
-                    switch (typeof item) {
-                        case "boolean":
-                            return { type: TYPES.BOOLEAN, value: item }
-                        case "number":
-                            return { type: TYPES.NUMBER, value: item }
-                        case "string":
-                            return { type: TYPES.STRING, value: item }
-                        case "function":
-                        case "object":
-                            var id
-                            if (!backMap.has(item)) {
-                                id = refId++
-                                map.set(id, item)
-                                backMap.set(item, id)
-                            } else {
-                                id = backMap.get(item)
-                            }
-
-                            return { type: TYPES.OBJECT, ref: id }
-                    }
-                }
+                return destructValue(item, map, backMap)
+            }
+            function unformat(item) {
+                return constructValue(item, map, backMap)
             }
 
             listen(function handler(requestText) {
@@ -170,6 +252,26 @@ var global = typeof window !== 'undefined' ? window : self;
                         map.delete(request.ref)
                         backMap.delete(self)
                         return JSON.stringify({ success: true })
+                    case COMMANDS.SET_PROPERTY:
+                        var self = unformat(request.self)
+                        var prop = request.prop
+                        var value = unformat(request.value)
+
+                        try {
+                            self[prop] = value
+                            return JSON.stringify(true)
+                        } catch (err) {
+                            return JSON.stringify(false)
+                        }
+                    case COMMANDS.APPLY:
+                        var func = unformat(request.func)
+                        var self = unformat(request.self)
+                        var args = request.args.map(unformat)
+                        return JSON.stringify(format(func.apply(self, args)))
+                    case COMMANDS.CONSTRUCT:
+                        var func = unformat(request.func)
+                        var args = request.args.map(unformat)
+                        return JSON.stringify(format(new func(...args)))
                 }
 
                 return '{"error":"not implement"}'
@@ -203,6 +305,7 @@ var global = typeof window !== 'undefined' ? window : self;
             }
 
             const proxies = new Map()
+            const idMap = new WeakMap()
 
             function createCleaner() {
                 var gcGroup = new FinalizationGroup((refIds) => {
@@ -217,27 +320,15 @@ var global = typeof window !== 'undefined' ? window : self;
                 return gcGroup
             }
 
-            function createProxy(refId) {
+            function createProxy(refId, type = TYPES.OBJECT) {
                 if (proxies.has(refId)) {
                     return proxies.get(refId).deref()
                 }
 
-                var proxy = new Proxy({}, {
+                var proxy = new Proxy(type === TYPES.FUNCTION ? () => {} : {}, {
                     get: function (target, prop, receiver) {
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
-
-                        switch (result.type) {
-                            case TYPES.NUMBER:
-                            case TYPES.BOOLEAN:
-                            case TYPES.STRING:
-                                return result.value
-                            case TYPES.NULL:
-                                return null
-                            case TYPES.UNDEFINED:
-                                return undefined
-                            case TYPES.OBJECT:
-                                return createProxy(result.ref)
-                        }
+                        return constructProxiedValue(result, createProxy)
                     },
                     ownKeys: function (target) {
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_OWN_KEYS, self: refId })))
@@ -246,6 +337,45 @@ var global = typeof window !== 'undefined' ? window : self;
                     getOwnPropertyDescriptor(target, prop) {
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_OWN_PROPERTY_DESCRIPTOR, self: refId, prop })))
                         return Object.assign(result, { configurable: true })
+                    },
+                    set: function (target, prop, value) {
+                        var request = {
+                            command: COMMANDS.SET_PROPERTY,
+                            self: { ref: refId, type },
+                            prop,
+                            value: destructProxiedValue(value, idMap)
+                        }
+
+                        var result = JSON.parse(send(JSON.stringify(request)))
+
+                        return result
+                    },
+                    apply: function (target, thisArg, argumentsList) {
+                        var request = {
+                            command: COMMANDS.APPLY,
+                            func: { ref: refId, type },
+                            self: destructProxiedValue(thisArg, idMap),
+                            args: argumentsList.map(value => {
+                                return destructProxiedValue(value, idMap)
+                            })
+                        }
+
+                        var result = JSON.parse(send(JSON.stringify(request)))
+
+                        return constructProxiedValue(result, createProxy)
+                    },
+                    construct(target, argumentsList) {
+                        var request = {
+                            command: COMMANDS.CONSTRUCT,
+                            func: { ref: refId, type },
+                            args: argumentsList.map(value => {
+                                return destructProxiedValue(value, idMap)
+                            })
+                        }
+
+                        var result = JSON.parse(send(JSON.stringify(request)))
+
+                        return constructProxiedValue(result, createProxy)
                     }
                 })
 
@@ -253,7 +383,7 @@ var global = typeof window !== 'undefined' ? window : self;
 
                 finalizerGroup.register(proxy, refId)
                 proxies.set(refId, new WeakRef(proxy))
-
+                idMap.set(proxy, refId)
                 return proxy
             }
 

@@ -14,4 +14,8 @@ self.addEventListener('message', function (event) {
         console.log('Host location property: ', key, typeof remoteWindow.location[key] === 'string' ? remoteWindow.location[key]: '(object ommited)')
     }
     self.remoteWindow = remoteWindow
+
+    var el = remoteWindow.document.createElement('div')
+    el.innerHTML = 'test'
+    remoteWindow.document.body.appendChild(el)
 })
