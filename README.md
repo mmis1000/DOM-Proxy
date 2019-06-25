@@ -1,4 +1,4 @@
-# DOM-Proxy (POC)
+# WebWorker DOM Proxy (POC)
 Transparent rpc between web worker and browser main context
 
 ## Requirements:
