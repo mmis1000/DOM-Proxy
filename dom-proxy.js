@@ -170,7 +170,7 @@ var global = typeof window !== 'undefined' ? window : self;
             COMMANDS,
             TYPES
         },
-        createHost() {
+        createHost(rootObject = window) {
             /**
              * @type {ArrayBuffer}
              */
@@ -230,7 +230,7 @@ var global = typeof window !== 'undefined' ? window : self;
 
                 switch (request.command) {
                     case COMMANDS.GET_ROOT:
-                        return JSON.stringify(format(window))
+                        return JSON.stringify(format(rootObject))
                     case COMMANDS.GET_PROPERTY:
                         var self = map.get(request.self)
                         var prop = request.prop
@@ -327,6 +327,11 @@ var global = typeof window !== 'undefined' ? window : self;
 
                 var proxy = new Proxy(type === TYPES.FUNCTION ? function () {} : {}, {
                     get: function (target, prop, receiver) {
+                        // DO Not trap these two function or it will break proxy in proxy
+                        if (typeof target === 'function' && (prop === 'apply' || prop === 'call')) {
+                            return target[prop]
+                        }
+
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
                         return constructProxiedValue(result, createProxy)
                     },
