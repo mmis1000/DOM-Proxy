@@ -267,7 +267,7 @@ var global = typeof window !== 'undefined' ? window : self;
                         var func = unformat(request.func)
                         var self = unformat(request.self)
                         var args = request.args.map(unformat)
-                        return JSON.stringify(format(func.apply(self, args)))
+                        return JSON.stringify(format(Reflect.apply(func, self, args)))
                     case COMMANDS.CONSTRUCT:
                         var func = unformat(request.func)
                         var args = request.args.map(unformat)
@@ -327,11 +327,6 @@ var global = typeof window !== 'undefined' ? window : self;
 
                 var proxy = new Proxy(type === TYPES.FUNCTION ? function () {} : {}, {
                     get: function (target, prop, receiver) {
-                        // DO Not trap these two function or it will break proxy in proxy
-                        if (typeof target === 'function' && (prop === 'apply' || prop === 'call')) {
-                            return target[prop]
-                        }
-
                         var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
                         return constructProxiedValue(result, createProxy)
                     },
