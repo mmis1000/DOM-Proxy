@@ -50,7 +50,11 @@ self.addEventListener('message', function (event) {
     // LIMITATION: you can only set/pass object from remote on/to object/function from remote
     // as the proxy is not bilateral
     remoteWindow.a = new (remoteWindow.Object)()
+
+    // but eval works as is
     remoteWindow.eval('console.log(a)')
+
+    // new Function also works as is
     var func = new remoteWindow.Function('el', `
         el.addEventListener('click', () => alert('LOLLLL'))
     `)
