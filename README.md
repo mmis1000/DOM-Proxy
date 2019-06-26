@@ -6,6 +6,13 @@ Transparent rpc between web worker and browser main context
 2. WeakRef (stage3)
 3. FinalizationGroup (stage2)
 
+## API
+- DOMProxy.createHost() => \[\[Payload Object]]  
+  - Call this on the main window, get the payload, pass it to webworker via postMessage
+- DOMProxy.createProxy(\[\[Payload Object]]) => \[\[Proxied window object]]  
+  - Recieve the payload from main window via message listener, and create proxied window with it
+- No other api required, no async await things, no value wrapper, nothing else
+
 ## Usage
 
 Host
@@ -47,7 +54,7 @@ self.addEventListener('message', function (event) {
     // while applied directly (no async await required!!!)
     console.log(remoteWindow.document.body.innerHTML)
 
-    // LIMITATION: you can only set/pass object from remote on/to object/function from remote
+    // CURRENT LIMITATION: you can only set/pass object from remote on/to object/function from remote
     // as the proxy is not bilateral
     remoteWindow.a = new (remoteWindow.Object)()
 
