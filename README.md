@@ -171,7 +171,7 @@ cleaner.register(fakeObject, id)
 
 ```js
 // mainland
-const id = getIdToDropFromCache()
+const id = getIdToDropFromWorker()
 findIdInMapAndDropIt(map, id)
 
 // worker
