@@ -7,11 +7,11 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
 2. [API](#API)
 3. [Example](#Example)
 4. [Explanation and caveats](#Explanation-and-caveats)
-  1. [Explanation](#Explanation)
-    1. [Operate on mainland sync](#Operate-on-mainland-sync)
-    2. [Strong equal of proxied same object](#Strong-equal-of-proxied-same-object)
-    3. [The-garbage-collection](#The-garbage-collection)
-  2. [Caveats](#Caveats)
+   1. [Explanation](#Explanation)
+      1. [Operate on mainland sync](#Operate-on-mainland-sync)
+      2. [Strong equal of proxied same object](#Strong-equal-of-proxied-same-object)
+      3. [The-garbage-collection](#The-garbage-collection)
+   2. [Caveats](#Caveats)
 
 
 ## Requirements As of 2019-06-25
