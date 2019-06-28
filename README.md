@@ -93,7 +93,7 @@ so everything should just works as if you are operate on these object in the mai
 The mainland then receive the request async with `Atomic.asyncAwait`.  
 And do things it need to do, response to worker with `Atomic.notify`.
 
-#### Strong equal of proxied same object
+#### Strict equal of proxied same object
 1. This library marked the object it send to worker with an id and save it to a collection with that id.  
 
 ```js
