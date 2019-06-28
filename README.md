@@ -16,9 +16,11 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
 
 ## Requirements As of 2019-06-25
 
-1. Atomics.waitAsync (stage2)
-2. WeakRef (stage3)
-3. FinalizationGroup (stage2)
+1. [Atomics.waitAsync (stage2)](https://github.com/tc39/proposal-atomics-wait-async)
+2. [WeakRef (stage3)](https://github.com/tc39/proposal-weakrefs)
+3. [FinalizationGroup (stage2)](https://github.com/tc39/proposal-weakrefs)
+
+You can try this with chromium(and its friends) 76+ with `--js-flags='--harmony-weak-refs'` flag from cli
 
 ## API
 - DOMProxy.createHost(`rootObject` = `window`) => `[[Payload Object]]`  
@@ -85,8 +87,11 @@ self.addEventListener('message', function (event) {
 ## Explanation and caveats
 ### Explanation
 #### Operate on mainland sync
-This library merely proxy traps of `Proxy` to the mainland, so everything should just works as if you are operate on these object in the mainland.
-The mainland then receive the request async with `Atomic.asyncAwait` and, do things it need to do, response to worker with `Atomic.notify`
+This library merely proxy traps of `Proxy` to the mainland,  
+so everything should just works as if you are operate on these object in the mainland.
+
+The mainland then receive the request async with `Atomic.asyncAwait`.  
+And do things it need to do, response to worker with `Atomic.notify`.
 
 #### Strong equal of proxied same object
 1. This library marked the object it send to worker with an id and save it to a collection with that id.  
@@ -113,8 +118,8 @@ var fakeObject = createProxy(id)
 map.set(id, fakeObject)
 ```
 
-3. WHen the next time, the worker is requesting the same object, 
-   the mainland will find the item in map and send the same id to worker. 
+3. When the next time, the worker is requesting the same object,  
+   the mainland will find the item in map and send the same id to worker.  
    The worker then find the same object in map with that id
 
 ```js
@@ -129,9 +134,11 @@ map.get(id)
 
 #### The garbage collection
 Continue from section above.  
+
 How could you prevent the map in mainland and worker from leaking?  
+
 The `WeakRef` proposal introduced two new APIs that allow you to observe the time garbage collection happened.  
-So we make use of them
+So we make use of them.
 
 1. The worker was modified to hold the fakeObject with a `WeakRef` instead of directly to allow the proxy being collected.
 
@@ -143,7 +150,7 @@ So we make use of them
 ++ map.set(id, new WeakRef(fakeObject))
 ```
 
-2. The worker use the `FinalizationGroup` to track when will the garbage collection could happen (no one is holding the proxy anymore).
+2. The worker use the `FinalizationGroup` to track when will the garbage collection could happen (no one is holding the proxy anymore).  
    And send the event to mainland.
 
 ```js
@@ -158,7 +165,7 @@ const cleaner = new FinalizationGroup(id => {
 cleaner.register(fakeObject, id)
 ```
 
-3. The mainland the drop the cache it has with the id received.  
+3. The mainland then drop the cache it has with the id received.  
    At this point, the knowledge of that object is totally gone from the proxy system.  
    No memory leak happened, cheers.
 
@@ -171,6 +178,9 @@ findIdInMapAndDropIt(map, id)
 ```
 
 ### Caveats
-1. Due to the lack of native `Atomic.asyncAwait`, polyfill is used, the operation is actually far more expensive then it should (each call cost about 0.5ms).  
-   This means calls like `Object.keys(fakeObject)` will be very slow because it requires to call `getOwnPropertyDescriptor` on every single property(call it on `window` will result in about 200 requests).
-2. Due to the `FinalizationGroup` and `WeakRef` isn't ship on all stable browser version. It isn't possible to use it without edit the browser setting from cli currently.
+1. Due to the lack of native `Atomic.asyncAwait`, polyfill is used, the operation is actually far more expensive then it should (each call cost about 0.5ms).
+
+   This means calls like `Object.keys(fakeObject)` will be very slow because it requires to call `getOwnPropertyDescriptor` on every single property (call it on `window` will result in about 200 requests).
+2. Due to the `FinalizationGroup` and `WeakRef` isn't ship on all stable browser version.
+
+   It isn't possible to use this library without edit the browser setting from cli directly currently. (that's why this is a POC, WeakRef can't be polyfilled at all)
