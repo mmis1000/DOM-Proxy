@@ -9,7 +9,11 @@ self.addEventListener('message', function (event) {
         console.log('Host location: ', remoteWindow.location.href)
         console.log('Host window title: ', remoteWindow.document.title)
         console.log('Strict equal: ', remoteWindow.document === remoteWindow.document)
+
+        console.time('worker')
         console.log('Host window keys: ', Object.keys(remoteWindow))
+        console.timeEnd('worker')
+
         console.log('Host location keys: ', Object.getOwnPropertyNames(remoteWindow.location))
 
         for (let key of Object.getOwnPropertyNames(remoteWindow.location)) {
