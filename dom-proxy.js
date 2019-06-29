@@ -8,7 +8,7 @@ var global = typeof window !== 'undefined' ? window : self;
     const I32_CHILD_LOCK_INDEX = 1
     const I32_DATA_LENGTH_INDEX = 2
     const I32_DATA_INDEX = 3
-    const DATA_LRNGTH_LIMIT = 1024 * 1024 - 8
+    const DATA_LENGTH_LIMIT = 1024 * 1024 - 8
 
 
     const COMMANDS = {
@@ -165,12 +165,12 @@ var global = typeof window !== 'undefined' ? window : self;
                 I32_DATA_INDEX
             },
             LIMITS: {
-                DATA_LRNGTH_LIMIT
+                DATA_LENGTH_LIMIT
             },
             COMMANDS,
             TYPES
         },
-        createHost(rootObject = window) {
+        createHost(rootObject = window, { syncWait = false } = { syncWait: false }) {
             /**
              * @type {ArrayBuffer}
              */
@@ -186,19 +186,41 @@ var global = typeof window !== 'undefined' ? window : self;
                     I32_CHILD_LOCK_INDEX,
                     I32_DATA_LENGTH_INDEX,
                     I32_DATA_INDEX,
-                    DATA_LRNGTH_LIMIT
+                    DATA_LENGTH_LIMIT
                 },
                 buffer,
                 int32,
                 dataView
             }
 
+            function tryWaitSync(int32, I32_PARENT_LOCK_INDEX, old, timeout) {
+                const start = performance.now()
+
+                try {
+                    return Atomics.wait(int32, I32_PARENT_LOCK_INDEX, old, timeout)
+                } catch (err) { }
+
+                while (Atomics.load(int32, I32_PARENT_LOCK_INDEX) === old) {
+                    if (performance.now() - start >= timeout) {
+                        return 'timed-out'
+                    }
+                }
+
+                //console.log('not-equal')
+                return 'not-equal'
+            }
+
             async function listen(handler) {
                 let old = 0;
 
                 while (true) {
-
-                    await Atomics.waitAsync(int32, I32_PARENT_LOCK_INDEX, old)
+                    if (syncWait) {
+                        if (tryWaitSync(int32, I32_PARENT_LOCK_INDEX, old, 100) === 'timed-out') {
+                            await Atomics.waitAsync(int32, I32_PARENT_LOCK_INDEX, old)
+                        }
+                    } else {
+                        await Atomics.waitAsync(int32, I32_PARENT_LOCK_INDEX, old)
+                    }
 
                     var length = dataView.getUint32(I32_DATA_LENGTH_INDEX * 4)
                     var text = parse(buffer, I32_DATA_INDEX * 4, length)

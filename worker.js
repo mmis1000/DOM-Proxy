@@ -22,21 +22,27 @@ self.addEventListener('message', function (event) {
 
         self.remoteWindow = remoteWindow
 
-        var el = remoteWindow.document.createElement('div')
-        el.innerHTML = 'You have been hacked from web worker lol'
-        remoteWindow.document.body.appendChild(el)
-
-        console.log(remoteWindow.document.body.innerHTML)
-        remoteWindow.a = new (remoteWindow.Object)()
-        remoteWindow.eval('console.log(a)')
         var func = new remoteWindow.Function('el', `
             el.addEventListener('click', () => alert('LOLLLL'))
         `)
 
-        func(el)
+        console.time('worker-dom')
+        let document = remoteWindow.document;
+        for (let i = 0; i < 5000; i++) {
+            let el = document.createElement('div')
+            el.innerHTML = '(' + i + ') You have been hacked from web worker lol'
+            document.body.appendChild(el)
+            func(el)
+        }
+        console.timeEnd('worker-dom')
+
+        console.log(remoteWindow.document.body.innerHTML)
+        remoteWindow.a = new (remoteWindow.Object)()
+        remoteWindow.eval('console.log(a)')
+
     }
     // let's go deeeeper
-    var payload2 = DOMProxy.createHost(remoteWindow)
+    var payload2 = DOMProxy.createHost(remoteWindow, { syncWait: true })
     const myWorker = new Worker("worker2.js");
     myWorker.postMessage(payload2)
 })

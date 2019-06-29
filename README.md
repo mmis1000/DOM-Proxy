@@ -23,8 +23,13 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
 You can try this with chromium(and its friends) 76+ with `--js-flags='--harmony-weak-refs'` flag from cli
 
 ## API
-- DOMProxy.createHost(`rootObject` = `window`) => `[[Payload Object]]`  
+- DOMProxy.createHost(`rootObject` = `window`, { `syncWait` = `false` }) => `[[Payload Object]]`  
   - Call this on the main window, get the payload, pass it to webworker via postMessage
+  - Options
+    - syncWait
+      - default: `false`
+      - try to sync wait on host side to improve rpc efficiency, use `Atomic.wait` if possible, use a dead loop to emulate synchronized wait if impossible
+      
 - DOMProxy.createProxy(`[[Payload Object]]`) => `[[Proxied rootObject]]`  
   - Receive the payload from main window via message listener, and create root object with it
 - No other api required, no async await things, no value wrapper, nothing else
@@ -36,7 +41,7 @@ Host
 <script src="await-async.js"></script>
 <script src="dom-proxy.js"></script>
 <script>
-    var payload = DOMProxy.createHost()
+    var payload = DOMProxy.createHost(window, { syncWait: true })
     const myWorker = new Worker("worker.js");
     myWorker.postMessage(payload)
 </script>
