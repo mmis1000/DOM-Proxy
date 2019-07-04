@@ -9,7 +9,7 @@ var global = typeof window !== 'undefined' ? window : self;
     const I32_DATA_LENGTH_INDEX = 2
     const I32_DATA_INDEX = 3
     const DATA_LENGTH_LIMIT = 1024 * 1024 - 8
-
+    const SYNC_WAIT_TIMEOUT = 10
 
     const COMMANDS = {
         GET_ROOT: 'GET_ROOT',
@@ -215,7 +215,7 @@ var global = typeof window !== 'undefined' ? window : self;
 
                 while (true) {
                     if (syncWait) {
-                        if (tryWaitSync(int32, I32_PARENT_LOCK_INDEX, old, 100) === 'timed-out') {
+                        if (tryWaitSync(int32, I32_PARENT_LOCK_INDEX, old, SYNC_WAIT_TIMEOUT) === 'timed-out') {
                             await Atomics.waitAsync(int32, I32_PARENT_LOCK_INDEX, old)
                         }
                     } else {

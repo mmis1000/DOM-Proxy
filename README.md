@@ -1,4 +1,4 @@
-# WebWorker DOM Proxy (POC)
+# ![Dom-proxy](./public/img/dom-proxy-64.png) WebWorker DOM Proxy (POC)  
 Transparent rpc between web worker and mainland(the main page context)  
 Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparent at the cost of halt the web worker and continue on operation finished with `Atomic.wait`.  
 
