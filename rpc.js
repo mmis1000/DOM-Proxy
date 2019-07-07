@@ -180,13 +180,16 @@ function releaseGIL(typedArray, index) {
 }
 
 let pollSwitch = 0
-
+let cancel = ()=>{}
 /**
  * stop async the poll loop
  */
 function stopAsyncPolling() {
+    if (pollSwitch === 0) {
+        cancel()
+    }
+
     pollSwitch++
-    // TODO:
 }
 
 /**
@@ -223,7 +226,9 @@ function startAsyncPolling(ia32, currentThread) {
 
     loop()
 
-    return cancelCurrent
+    cancel = () => {
+        cancelCurrent()
+    }
 }
 
 /**
@@ -232,7 +237,39 @@ function startAsyncPolling(ia32, currentThread) {
  * @param {number} current 
  */
 function handleMessage(ia32, current) {
-    // TODO:
+    let GIL = Atomics.load(ia32, OFFSET_GIL)
+    const state = field(GIL, MASK_STATE)
+
+    if (state !== STATE_SEND) {
+        // maybe preparing...
+        wait(ia32, OFFSET_GIL, GIL)
+    }
+
+    GIL = Atomics.load(ia32, OFFSET_GIL)
+
+    if (field(GIL, MASK_STATE) !== STATE_SEND) {
+        debugger
+        throw new Error('bad state 0x' + state.toString(16))
+    }
+
+    const from = field(GIL, MASK_FROM)
+    
+    const messageSize = Atomics.load(ia32, OFFSET_BUFFER_SIZE)
+    const message = getMessage(ia32, messageSize)
+
+    const response = handler(from, message)
+    const size = setMessage(ia32, response)
+
+    Atomics.store(ia32, OFFSET_BUFFER_SIZE, size)
+
+    let newGIL = 
+        current<< MASK_OFFSET[MASK_FROM] |
+        from << MASK_OFFSET[MASK_TO] |
+        STATE_RESPONSE << MASK_OFFSET[MASK_STATE]
+    
+    // send the message via GIL if the target is in block mode
+    Atomics.store(ia32, OFFSET_GIL, newGIL)
+    Atomics.notify(ia32, OFFSET_GIL, Infinity)
 }
 
 /**
@@ -270,7 +307,7 @@ function pollResponse(ia32, GIL, currentThread) {
         } while (to !== currentThread)
 
         if (field(GIL, MASK_STATE) === STATE_RESPONSE) {
-            return getMessage(ia32)
+            return getMessage(ia32, Atomics.load(ia32, OFFSET_BUFFER_SIZE))
         } else if (field(GIL, MASK_STATE) === STATE_SEND) {
             // we got a side quest
             stopAsyncPolling()
@@ -292,19 +329,42 @@ function field (GIL, field) {
     return (GIL & MASK[field]) >> MASK_OFFSET[field]
 }
 
+const encoder = new TextEncoder()
 /**
  * 
  * @param {Int32Array} int32 
  * @param {any} message 
+ * @returns {number} set size
  */
-function setMessage(int32, message) {}
+function setMessage(int32, message) {
+    /**
+     * @type {SharedArrayBuffer}
+     */
+    const sab = (int32.buffer)
+    const encoded = encoder.encode(JSON.stringify(message))
+    const targetBuffer = new Uint8Array(sab, OFFSET_DATA * 4, encoded.byteLength)
+    targetBuffer.set(encoded)
 
+    return encoded.byteLength
+}
+
+const decoder = new TextDecoder()
 /**
  * 
  * @param {Int32Array} int32  
+ * @param {number} size  
  * @returns {any}
  */
-function getMessage(int32) {}
+function getMessage(int32, size) {
+    /**
+     * @type {SharedArrayBuffer}
+     */
+    const sab = (int32.buffer)
+    const targetBuffer = new Uint8Array(sab, OFFSET_DATA * 4, size)
+    const text = decoder.decode(targetBuffer)
+
+    return JSON.parse(text)
+}
 
 const THREAD_STATE_NORMAL = 0
 const THREAD_STATE_BLOCKING = 1
@@ -370,4 +430,13 @@ function send(ia32, currentThread, targetThread, message) {
         return actualSend()
     }
 
+}
+
+/**
+ * 
+ * @param {number} from 
+ * @param {any} message 
+ */
+function handler (from, message) {
+    // TODO
 }
