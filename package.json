@@ -1,0 +1,19 @@
+{
+  "name": "dom-proxy",
+  "version": "1.0.0",
+  "description": "Transparent rpc between web worker and mainland(the main page context)   Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparent at the cost of halt the web worker and continue on operation finished with `Atomic.wait`.",
+  "main": "dom-proxy.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mmis1000/DOM-Proxy.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mmis1000/DOM-Proxy/issues"
+  },
+  "homepage": "https://github.com/mmis1000/DOM-Proxy#readme"
+}
