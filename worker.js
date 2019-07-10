@@ -1,48 +1,34 @@
-importScripts('dom-proxy.js')
-importScripts('await-async.js')
+importScripts('./await-async.js')
+importScripts('./rpc.js')
 
-self.addEventListener('message', function (event) {
-    var payload = event.data
-    var remoteWindow = DOMProxy.createProxy(payload)
-    {
-        console.log('Host js object: ', remoteWindow.hostData.test.test2)
-        console.log('Host location: ', remoteWindow.location.href)
-        console.log('Host window title: ', remoteWindow.document.title)
-        console.log('Strict equal: ', remoteWindow.document === remoteWindow.document)
+let ia32
+let current
+let send
 
-        console.time('worker')
-        console.log('Host window keys: ', Object.keys(remoteWindow))
-        console.timeEnd('worker')
+self.addEventListener('message', event => {
+    var data = event.data
 
-        console.log('Host location keys: ', Object.getOwnPropertyNames(remoteWindow.location))
+    if (data.command === 'init') {
+        ia32 = data.ia32
 
-        for (let key of Object.getOwnPropertyNames(remoteWindow.location)) {
-            console.log('Host location property: ', key, typeof remoteWindow.location[key] === 'string' ? remoteWindow.location[key]: '(object ommited)')
-        }
+        const temp = listen((from, message) => {
+            console.log('#' + current + ' received request from client #' + from)
+            return 'result-' + current + '-' + message
+        }, ia32)
 
-        self.remoteWindow = remoteWindow
+        current = temp.current
+        send = temp.send
 
-        var func = new remoteWindow.Function('el', `
-            el.addEventListener('click', () => alert('LOLLLL'))
-        `)
-
-        console.time('worker-dom')
-        let document = remoteWindow.document;
-        for (let i = 0; i < 5000; i++) {
-            let el = document.createElement('div')
-            el.innerHTML = '(' + i + ') You have been hacked from web worker lol'
-            document.body.appendChild(el)
-            func(el)
-        }
-        console.timeEnd('worker-dom')
-
-        console.log(remoteWindow.document.body.innerHTML)
-        remoteWindow.a = new (remoteWindow.Object)()
-        remoteWindow.eval('console.log(a)')
-
+        self.postMessage({
+            command: 'ready',
+            current
+        })
     }
-    // let's go deeeeper
-    var payload2 = DOMProxy.createHost(remoteWindow, { syncWait: true })
-    const myWorker = new Worker("worker2.js");
-    myWorker.postMessage(payload2)
+
+    if (data.command === 'send') {
+        const target = data.target
+        const message = data.message
+
+        console.log('result', send(target, message))
+    }
 })

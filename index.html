@@ -18,11 +18,44 @@
         }
     </script>
     <script src="await-async.js"></script>
-    <script src="dom-proxy.js"></script>
+    <script src="rpc.js"></script>
     <script>
-        var payload = DOMProxy.createHost(window, { syncWait: true })
-        const myWorker = new Worker("worker.js");
-        myWorker.postMessage(payload)
+        var sab = new SharedArrayBuffer(1024 * 1024 * 8)
+        var ia32 = new Int32Array(sab)
+
+        function spawn() {
+            return new Promise((resolve, reject) => {
+                const worker = new Worker('./worker.js')
+                worker.postMessage({
+                    command: 'init',
+                    ia32
+                })
+                worker.addEventListener('message', function (event) {
+                    var data = event.data
+                    if (data.command === 'ready') {
+                        resolve({
+                            current: data.current,
+                            send (target, message) {
+                                worker.postMessage({
+                                    command: 'send',
+                                    target,
+                                    message
+                                })
+                            }
+                        })
+                    }
+                })
+            })
+        }
+
+        (async function () {
+            var worker0 = await spawn()
+            var worker1 = await spawn()
+            var worker2 = await spawn()
+            worker0.send(worker1.current, 'test-message')
+            worker1.send(worker2.current, 'test-message')
+            worker2.send(worker0.current, 'test-message')
+        } ())
     </script>
 </body>
 </html>
