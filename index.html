@@ -52,9 +52,9 @@
             var worker0 = await spawn()
             var worker1 = await spawn()
             var worker2 = await spawn()
-            worker0.send(worker1.current, 'test-message')
-            worker1.send(worker2.current, 'test-message')
-            worker2.send(worker0.current, 'test-message')
+            worker0.send(worker1.current, 'test-message-1')
+            worker1.send(worker2.current, 'test-message-2')
+            worker2.send(worker0.current, 'test-message-3')
         } ())
     </script>
 </body>

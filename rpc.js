@@ -306,8 +306,19 @@ function listen(handler, ia32) {
             promise: promise.then((res) => {
                 Atomics.sub(ia32, OFFSET_THREAD_LOCK + currentThread, 1)
                 console.log('own', Atomics.load(ia32, OFFSET_THREAD_LOCK + currentThread))
-                const GIL = Atomics.load(ia32, OFFSET_GIL)
+                
+                let GIL = Atomics.load(ia32, OFFSET_GIL),
+                    to = field(GIL, MASK_TO)
+
+                while (to !== currentThread) {
+                    wait(ia32, OFFSET_GIL, GIL)
+                    GIL = Atomics.load(ia32, OFFSET_GIL)
+
+                    to = field(GIL, MASK_TO)
+                }
+                
                 console.log('GIL', currentThread, field(GIL, MASK_FROM), field(GIL, MASK_TO), field(GIL, MASK_STATE))
+
                 return res
             })
         }
