@@ -97,7 +97,10 @@ function listen(handler, ia32) {
         const start = performance.now()
 
         try {
-            return Atomics.wait(ia32, offset, old, timeout)
+            // console.trace('block wait start')
+            var res = Atomics.wait(ia32, offset, old, timeout)
+            // console.log('block wait end')
+            return res
         } catch (err) { }
 
         while (Atomics.load(ia32, offset) === old) {
@@ -165,9 +168,9 @@ function listen(handler, ia32) {
         const success = original === 0
         const current = success ? newState : original
 
-        if (success) {
-            console.log('set gil to ' + current)
-        }
+        // if (success) {
+        //     console.log('set gil to ' + current)
+        // }
 
         return {
             current,
@@ -190,7 +193,7 @@ function listen(handler, ia32) {
      * @param {Int32Array} typedArray
      */
     function releaseGIL(typedArray) {
-        console.log('set gil to 0')
+        // console.log('set gil to 0')
         Atomics.store(typedArray, OFFSET_GIL, 0)
         Atomics.notify(typedArray, OFFSET_GIL, Infinity)
     }
@@ -215,9 +218,9 @@ function listen(handler, ia32) {
      */
     function startAsyncPolling(ia32, currentThread) {
         pollSwitch--
-
+        if (pollSwitch < 0) throw new Error('fuck you')
         if (pollSwitch !== 0) {
-            return () => { }
+            return () => {}
         }
 
 
@@ -246,6 +249,7 @@ function listen(handler, ia32) {
         loop()
 
         cancel = () => {
+            // console.trace('called cancel')
             cancelCurrent()
         }
     }
@@ -287,7 +291,7 @@ function listen(handler, ia32) {
             STATE_RESPONSE << MASK_OFFSET[MASK_STATE]
 
         // send the message via GIL if the target is in block mode
-        console.log('set gil to ' + newGIL)
+        // console.log('set gil to ' + newGIL)
         Atomics.store(ia32, OFFSET_GIL, newGIL)
         Atomics.notify(ia32, OFFSET_GIL, Infinity)
     }
@@ -301,14 +305,17 @@ function listen(handler, ia32) {
         const IDLE = 0
 
         const { cancel, promise } = waitAsync(ia32, OFFSET_THREAD_LOCK + currentThread, IDLE)
+
         return {
             cancel,
             promise: promise.then((res) => {
                 Atomics.sub(ia32, OFFSET_THREAD_LOCK + currentThread, 1)
-                console.log('own', Atomics.load(ia32, OFFSET_THREAD_LOCK + currentThread))
+                // console.log('own', Atomics.load(ia32, OFFSET_THREAD_LOCK + currentThread))
                 
                 let GIL = Atomics.load(ia32, OFFSET_GIL),
                     to = field(GIL, MASK_TO)
+
+                if (GIL === 0) throw new AbortError('nope')
 
                 while (to !== currentThread) {
                     wait(ia32, OFFSET_GIL, GIL)
@@ -317,7 +324,7 @@ function listen(handler, ia32) {
                     to = field(GIL, MASK_TO)
                 }
                 
-                console.log('GIL', currentThread, field(GIL, MASK_FROM), field(GIL, MASK_TO), field(GIL, MASK_STATE))
+                // console.log('GIL', currentThread, field(GIL, MASK_FROM), field(GIL, MASK_TO), field(GIL, MASK_STATE))
 
                 return res
             })
@@ -414,6 +421,8 @@ function listen(handler, ia32) {
      * @param {any} message
      */
     function send(ia32, currentThread, targetThread, message) {
+        //console.log('about to send ' + message + ' at #' + current)
+
         function actualSend() {
             let GIL =
                 currentThread << MASK_OFFSET[MASK_FROM] |
@@ -428,6 +437,9 @@ function listen(handler, ia32) {
 
             // opt the target worker into block mode
             Atomics.add(ia32, OFFSET_THREAD_LOCK + targetThread, 1)
+
+            Atomics.load(ia32, OFFSET_GIL)
+            Atomics.load(ia32, OFFSET_THREAD_LOCK + targetThread)
 
             // send the message via GIL if the target is in block mode
             Atomics.notify(ia32, OFFSET_GIL, Infinity)
@@ -445,6 +457,10 @@ function listen(handler, ia32) {
             let { success, current: currentGIL } = acquireGIL(ia32, OFFSET_GIL, currentThread)
             threadState = THREAD_STATE_BLOCKING
 
+            // if (!success) {
+            //     console.log('failed to gain lock at #' + current)
+            // }
+
             while (!success) {
                 // handle the state
                 if (field(currentGIL, MASK_TO) === currentThread) {
@@ -461,9 +477,14 @@ function listen(handler, ia32) {
                 currentGIL = result.current
             }
 
+            // console.log('gain lock at #' + current)
+
+            // console.log('start to send request at #' + current)
             const result = actualSend()
 
             threadState = THREAD_STATE_NORMAL
+
+            // console.log(' release lock at #' + current)
             releaseGIL(ia32)
 
             return result

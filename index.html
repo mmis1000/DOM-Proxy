@@ -61,7 +61,11 @@
             await delay(1000)
             worker0.send(worker1.current, 'test-message-1')
             worker1.send(worker0.current, 'test-message-2')
-            worker1.send(worker2.current, 'test-message-3')
+
+            for (let i = 3; i < 100; i++) {
+                worker1.send(worker2.current, 'test-1-message-' + i)
+                worker2.send(worker1.current, 'test-2-message-' + i)
+            }
         } ())
     </script>
 </body>
