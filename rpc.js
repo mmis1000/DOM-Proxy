@@ -5,15 +5,14 @@
  * @param {(from: number, message: any)=>any} handler 
  * @param {Int32Array} ia32 
  */
-function listen(handler, ia32) {
-    
+function listen(handler, ia32, DEBUG = false) {
     /**
      * 
      * @param {*} msg 
      * @param  {...any} arg 
      */
     function log (msg, ...arg) {
-        console.debug('[#' + Atomics.add(ia32, OFFSET_LOG_ID, 1) + ']: #' + current + ' ' + msg, ...arg)
+        DEBUG && console.debug('[#' + Atomics.add(ia32, OFFSET_LOG_ID, 1) + ']: #' + current + ' ' + msg, ...arg)
     }
 
     /**

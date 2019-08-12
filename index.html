@@ -66,7 +66,8 @@
             // worker0.send([worker1.current, worker2.current, worker3.current, worker0.current, worker2.current, worker3.current, worker0.current], 'test-0-message')
             for (let i = 3; i < 100; i++) {
                 worker0.send([worker1.current, worker2.current, worker3.current, worker0.current], 'test-0-message-' + i)
-                worker3.send([worker2.current, worker1.current, worker0.current, worker3.current], 'test-0-message-' + i)
+                worker3.send([worker2.current, worker1.current, worker0.current, worker3.current], 'test-1-message-' + i)
+                worker1.send([worker2.current, worker1.current, worker0.current, worker1.current], 'test-2-message-' + i)
                 // worker1.send(worker2.current, 'test-1-message-' + i)
                 // worker2.send(worker1.current, 'test-2-message-' + i)
             }
