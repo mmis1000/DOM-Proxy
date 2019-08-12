@@ -22,7 +22,6 @@
     <script>
         var sab = new SharedArrayBuffer(1024 * 1024 * 8)
         var ia32 = new Int32Array(sab)
-        ia32[4] = 128
 
         function spawn() {
             return new Promise((resolve, reject) => {
@@ -36,10 +35,10 @@
                     if (data.command === 'ready') {
                         resolve({
                             current: data.current,
-                            send (target, message) {
+                            send (targets, message) {
                                 worker.postMessage({
                                     command: 'send',
-                                    target,
+                                    targets,
                                     message
                                 })
                             }
@@ -55,18 +54,21 @@
 
         (async function () {
             var worker0 = await spawn()
-            await delay(1000)
+            await delay(300)
             var worker1 = await spawn()
-            await delay(1000)
+            await delay(300)
             var worker2 = await spawn()
-            await delay(1000)
-            worker0.send(worker1.current, 'test-message-1')
-            worker1.send(worker0.current, 'test-message-2')
+            await delay(300)
+            var worker3 = await spawn()
+            // worker0.send(worker1.current, 'test-message-1')
+            // worker1.send(worker0.current, 'test-message-2')
 
-            for (let i = 3; i < 1000; i++) {
-                worker0.send(worker2.current, 'test-0-message-' + i)
-                worker1.send(worker2.current, 'test-1-message-' + i)
-                worker2.send(worker1.current, 'test-2-message-' + i)
+            // worker0.send([worker1.current, worker2.current, worker3.current, worker0.current, worker2.current, worker3.current, worker0.current], 'test-0-message')
+            for (let i = 3; i < 100; i++) {
+                worker0.send([worker1.current, worker2.current, worker3.current, worker0.current], 'test-0-message-' + i)
+                worker3.send([worker2.current, worker1.current, worker0.current, worker3.current], 'test-0-message-' + i)
+                // worker1.send(worker2.current, 'test-1-message-' + i)
+                // worker2.send(worker1.current, 'test-2-message-' + i)
             }
         } ())
     </script>

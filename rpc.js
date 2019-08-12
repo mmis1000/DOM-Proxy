@@ -13,7 +13,7 @@ function listen(handler, ia32) {
      * @param  {...any} arg 
      */
     function log (msg, ...arg) {
-        // console.debug('[#' + Atomics.add(ia32, OFFSET_LOG_ID, 1) + ']: #' + current + ' ' + msg, ...arg)
+        console.debug('[#' + Atomics.add(ia32, OFFSET_LOG_ID, 1) + ']: #' + current + ' ' + msg, ...arg)
     }
 
     /**
@@ -297,11 +297,19 @@ function listen(handler, ia32) {
         }
 
         const from = field(GIL, MASK_FROM)
+        const to = field(GIL, MASK_TO)
+
+        if (to !== current) {
+            // whyyy?
+            return
+        }
 
         const messageSize = Atomics.load(ia32, OFFSET_BUFFER_SIZE)
         const message = getMessage(ia32, messageSize)
 
+        threadState = THREAD_STATE_BLOCKING
         const response = handler(from, message)
+        threadState = THREAD_STATE_NORMAL
 
         const size = setMessage(ia32, response)
         Atomics.store(ia32, OFFSET_BUFFER_SIZE, size)
@@ -312,7 +320,7 @@ function listen(handler, ia32) {
             STATE_RESPONSE << MASK_OFFSET[MASK_STATE]
 
         // send the message via GIL if the target is in block mode
-        log('set gil to ' + newGIL)
+        log('set gil to ' + newGIL + ' ' + (new Error).stack)
         Atomics.store(ia32, OFFSET_GIL, newGIL)
         Atomics.notify(ia32, OFFSET_GIL, Infinity)
     }
@@ -355,16 +363,18 @@ function listen(handler, ia32) {
         while (true) {
             let to;
             let from;
-
+            let state;
             do {
                 wait(ia32, OFFSET_GIL, GIL)
                 GIL = Atomics.load(ia32, OFFSET_GIL)
+                log(`try polling response (from ${target} to ${currentThread})`)
                 explainGIL(GIL)
                 to = field(GIL, MASK_TO)
                 from = field(GIL, MASK_FROM)
-            } while (to !== currentThread || from !== target)
+                state = field(GIL, MASK_STATE)
+            } while (to !== currentThread)
 
-            if (field(GIL, MASK_STATE) === STATE_RESPONSE) {
+            if (field(GIL, MASK_STATE) === STATE_RESPONSE && from === target) {
                 log('response polled')
                 explainGIL(GIL)
                 return getMessage(ia32, Atomics.load(ia32, OFFSET_BUFFER_SIZE))
@@ -475,7 +485,7 @@ function listen(handler, ia32) {
 
             while (!success) {
                 // handle the state
-                if (currentGIL !== 0 && field(currentGIL, MASK_TO) === currentThread) {
+                if (currentGIL !== 0 && field(currentGIL, MASK_TO) === currentThread && field(currentGIL, MASK_STATE) === STATE_SEND) {
                     // This will block until all triggered rpc exited, includes those trigger in the middle
                     handleMessage(ia32, currentThread, currentGIL)
                 } else {

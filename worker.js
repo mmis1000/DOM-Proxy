@@ -11,8 +11,11 @@ self.addEventListener('message', event => {
     if (data.command === 'init') {
         ia32 = data.ia32
 
-        const temp = listen((from, message) => {
+        const temp = listen((from, { targets, message }) => {
             console.log('#' + current + ' received request from client #' + from)
+            if (targets.length > 0) {
+                return send(targets[0], { targets: targets.slice(1), message: current + '-' + message })
+            }
             return 'result-' + current + '-' + message
         }, ia32)
 
@@ -26,9 +29,10 @@ self.addEventListener('message', event => {
     }
 
     if (data.command === 'send') {
-        const target = data.target
+        console.log(data)
+        const targets = data.targets
         const message = data.message
 
-        console.log('result', send(target, message))
+        console.log('result', send(targets[0], { targets: targets.slice(1), message }))
     }
 })
