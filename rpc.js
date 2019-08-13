@@ -1,5 +1,14 @@
 // @ts-check
 
+if (typeof setImmediate === 'undefined') {
+    // @ts-ignore
+    setImmediate = (fn) => {
+        return setTimeout(fn, 0)
+    }
+    // @ts-ignore
+    clearImmediate = clearTimeout
+}
+
 /**
  * 
  * @param {(from: number, message: any)=>any} handler 
@@ -226,6 +235,11 @@ function listen(handler, ia32, DEBUG = false) {
     }
 
     /**
+     * @type {number}
+     */
+    let pendingId = -1
+
+    /**
      * start async poll loop
      * @param {Int32Array} ia32 
      * @param {number} currentThread 
@@ -237,37 +251,39 @@ function listen(handler, ia32, DEBUG = false) {
             return () => {}
         }
 
-
-        let cancelCurrent = () => { }
-
-        async function loop() {
-            while (true) {
-                try {
-                    let { promise, cancel } = pollRequestAsync(ia32, currentThread)
-                    cancelCurrent = cancel
-                    await promise
-
-                    const GIL = Atomics.load(ia32, OFFSET_GIL)
-                    if (GIL === 0 || field(GIL, MASK_TO) !== currentThread) continue
-
-                    handleMessage(ia32, currentThread, GIL)
-                } catch (err) {
-                    if (err instanceof AbortError) {
-                        break
+        clearImmediate(pendingId)
+        pendingId = setImmediate(() => {
+            let cancelCurrent = () => { }
+    
+            async function loop() {
+                while (true) {
+                    try {
+                        let { promise, cancel } = pollRequestAsync(ia32, currentThread)
+                        cancelCurrent = cancel
+                        await promise
+    
+                        const GIL = Atomics.load(ia32, OFFSET_GIL)
+                        if (GIL === 0 || field(GIL, MASK_TO) !== currentThread) continue
+    
+                        handleMessage(ia32, currentThread, GIL)
+                    } catch (err) {
+                        if (err instanceof AbortError) {
+                            break
+                        }
+    
+                        // rethrow it anyway
+                        throw err
                     }
-
-                    // rethrow it anyway
-                    throw err
                 }
             }
-        }
-
-        loop()
-
-        cancel = () => {
-            // console.trace('called cancel')
-            cancelCurrent()
-        }
+    
+            loop()
+    
+            cancel = () => {
+                // console.trace('called cancel')
+                cancelCurrent()
+            }
+        })
     }
 
     /**
