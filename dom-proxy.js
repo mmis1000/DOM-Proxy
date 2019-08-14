@@ -161,7 +161,9 @@ globalThis.DomProxy = {
     
                     const proxy = new Proxy(proto, {
                         get(target, p, receiver) {
-                            p = p.toString()
+                            if (typeof p === 'symbol') {
+                                throw new Error('not support')
+                            }
     
                             return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertyGet} */({
                                 type: 'get',
@@ -170,7 +172,9 @@ globalThis.DomProxy = {
                             })).value)
                         },
                         set(target, p, value, receiver) {
-                            p = p.toString()
+                            if (typeof p === 'symbol') {
+                                throw new Error('not support')
+                            }
     
                             return rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertySet} */({
                                 type: 'set',
@@ -202,6 +206,28 @@ globalThis.DomProxy = {
                                 set: convertToRaw(res.set),
                                 get: convertToRaw(res.get)
                             }
+                        },
+                        construct(target, argArray, newTarget) {
+                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandConstruct} */({
+                                type: "construct",
+                                self: convertToWrapped(newTarget),
+                                args: argArray.map(convertToWrapped),
+                                fn: /** @type { ValueObject|ValueFunction } */({
+                                    type,
+                                    ref: id
+                                })
+                            })).value)
+                        },
+                        apply(target, thisArg, argArray) {
+                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandCall} */({
+                                type: "call",
+                                self: convertToWrapped(thisArg),
+                                args: argArray.map(convertToWrapped),
+                                fn: /** @type { ValueObject|ValueFunction } */({
+                                    type,
+                                    ref: id
+                                })
+                            })).value)
                         }
                     })
                     
@@ -250,7 +276,7 @@ globalThis.DomProxy = {
          */
         function convertToWrapped(arg) {
             // null and undefined
-            if (arg === null) {
+            if (arg == null) {
                 return {
                     type: "primitive",
                     value: arg
@@ -353,6 +379,20 @@ globalThis.DomProxy = {
                         var object = getObjectFromId(message.id)
                         return {
                             properties: /** @type {string[]} */(Reflect.ownKeys(object).filter(i => typeof i === 'string'))
+                        }
+                    case "construct":
+                        var fn = convertToRaw(message.fn)
+                        var self = convertToRaw(message.self)
+                        var args = message.args.map(convertToRaw)
+                        return {
+                            value: convertToWrapped(Reflect.construct(fn, args, self))
+                        }
+                    case "call":
+                        var fn = convertToRaw(message.fn)
+                        var self = convertToRaw(message.self)
+                        var args = message.args.map(convertToRaw)
+                        return {
+                            value: convertToWrapped(Reflect.apply(fn, self, args))
                         }
                 }
             } catch (err) {

@@ -14,7 +14,7 @@ if (typeof setImmediate === 'undefined') {
  * @param {(from: number, message: any)=>any} handler 
  * @param {Int32Array} ia32 
  */
-function listen(handler, ia32, DEBUG = true) {
+function listen(handler, ia32, DEBUG = false) {
     /**
      * 
      * @param {*} msg 

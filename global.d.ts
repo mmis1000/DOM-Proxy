@@ -67,6 +67,21 @@ interface CommandProperties {
     id: number
 }
 
+interface CommandConstruct {
+    type: 'construct'
+    fn: Value,
+    self: Value,
+    args: Value[]
+}
+
+interface CommandCall {
+    type: 'call'
+    fn: Value,
+    self: Value,
+    args: Value[]
+}
+
+
 type Command = 
     CommandGetRoot |
     CommandRef |
@@ -74,7 +89,9 @@ type Command =
     CommandPropertyGet |
     CommandPropertySet |
     CommandPropertyGetDescriptor |
-    CommandProperties
+    CommandProperties |
+    CommandConstruct |
+    CommandCall
 
 interface ResponseGetRoot {
     value: Value
@@ -112,8 +129,16 @@ interface ResponsePropertyGetDescriptor {
 interface ResponseProperties {
     properties: string[]
 }
+
 interface ResponseError {
     error: Value
+}
+
+interface ResponseConstruct {
+    value: Value
+}
+interface ResponseCall {
+    value: Value
 }
 
 type DomProxyResponse = 
@@ -123,7 +148,9 @@ type DomProxyResponse =
     ResponsePropertyGet |
     ResponsePropertySet |
     ResponsePropertyGetDescriptor |
-    ResponseProperties
+    ResponseProperties |
+    ResponseConstruct |
+    ResponseCall
 
 interface RpcSend {
     (target: number, command: CommandGetRoot): ResponseGetRoot | ResponseError
@@ -133,6 +160,8 @@ interface RpcSend {
     (target: number, command: CommandPropertySet): ResponsePropertySet | ResponseError
     (target: number, command: CommandPropertyGetDescriptor): ResponsePropertyGetDescriptor | ResponseError
     (target: number, command: CommandProperties): ResponseProperties | ResponseError
+    (target: number, command: CommandConstruct): ResponseConstruct | ResponseError
+    (target: number, command: CommandCall): ResponseCall | ResponseError
 }
 
 type RpcSendWithThrow = {
@@ -143,6 +172,8 @@ type RpcSendWithThrow = {
     (target: number, command: CommandPropertySet): ResponsePropertySet
     (target: number, command: CommandPropertyGetDescriptor): ResponsePropertyGetDescriptor
     (target: number, command: CommandProperties): ResponseProperties
+    (target: number, command: CommandConstruct): ResponseConstruct
+    (target: number, command: CommandCall): ResponseCall
 }
 
 declare function setImmediate(fn: (...arg: any[])=>void): number

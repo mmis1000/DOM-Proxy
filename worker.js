@@ -4,7 +4,7 @@ importScripts('./dom-proxy.js')
 
 let ia32
 let host
-let document
+let window
 self.addEventListener('message', event => {
     var data = event.data
 
@@ -25,7 +25,7 @@ self.addEventListener('message', event => {
         self.test = '1'
 
         window.run = function () {
-            
+            window.alert('how the fuck?')
         }
     }
 })
