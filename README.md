@@ -23,15 +23,20 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
 You can try this with chromium(and its friends) 76+ with `--js-flags='--harmony-weak-refs'` flag from cli
 
 ## API
-- DOMProxy.createHost(`rootObject` = `window`, { `syncWait` = `false` }) => `[[Payload Object]]`  
-  - Call this on the main window, get the payload, pass it to webworker via postMessage
-  - Options
-    - syncWait
-      - default: `false`
-      - try to sync wait on host side to improve rpc efficiency, use `Atomic.wait` if possible, use a dead loop to emulate synchronized wait if impossible
-      
-- DOMProxy.createProxy(`[[Payload Object]]`) => `[[Proxied rootObject]]`  
-  - Receive the payload from main window via message listener, and create root object with it
+- DOMProxy.create(`ia32`, `getRoot`) => `[[Payload Object]]`
+  - Call this on both side that want to sue the proxy with same Int32Array baked by SharedArrayBuffer
+  - arguments
+    - ia32: Int32Array baked by SharedArrayBuffer
+    - getRoot : function that return object that represent this thread
+  - **must use only once per thread or it will hang**
+
+- [[Payload Object]] 
+  - properties
+    - current: Id of current payload
+    - getRemote(`remoteId`) => `[[proxied remote object]]`
+      - arguments
+        - remoteId: other thread's `[[Payload Object]].current`
+
 - No other api required, no async await things, no value wrapper, nothing else
 
 ## Example
@@ -39,11 +44,16 @@ Host
 ```html
 <!-- polyfill -->
 <script src="await-async.js"></script>
+<script src="rpc.js"></script>
 <script src="dom-proxy.js"></script>
 <script>
-    var payload = DOMProxy.createHost(window, { syncWait: true })
-    const myWorker = new Worker("worker.js");
-    myWorker.postMessage(payload)
+    var sab = new SharedArrayBuffer(1024 * 1024 * 8)
+    var ia32 = new Int32Array(sab)
+    var proxy = DomProxy.create(ia32, () => window)
+    myWorker.postMessage({
+        hostId: proxy.current,
+        ia32: ia32
+    })
 </script>
 ```
 
@@ -53,7 +63,8 @@ importScripts('dom-proxy.js')
 
 self.addEventListener('message', function (event) {
     var payload = event.data
-    var remoteWindow = DOMProxy.createProxy(payload)
+    var proxy = DomProxy.create(payload.ia32, () => self)
+    var remoteWindow = proxy.getRemote(payload.hostId)
 
     // access the window object as if it is actully in webworker
     console.log(remoteWindow.location.href)
@@ -74,18 +85,11 @@ self.addEventListener('message', function (event) {
     // while applied directly (no async await required!!!)
     console.log(remoteWindow.document.body.innerHTML)
 
-    // CURRENT LIMITATION: you can only set/pass object from remote on/to object/function from remote
-    // as the proxy is not bilateral
-    remoteWindow.a = new (remoteWindow.Object)()
+    // reverse proxied object as is
+    remoteWindow.a = {}
 
-    // but eval works as is
-    remoteWindow.eval('console.log(a)')
-
-    // new Function also works as is
-    var func = new remoteWindow.Function('el', `
-        el.addEventListener('click', () => alert('LOLLLL'))
-    `)
-    func(el)
+    // reverse proxied function also works as is
+    el.addEventListener('click', () => remoteWindow.alert('LOLLLL'))
 })
 ```
 

@@ -1,419 +1,448 @@
-var global = typeof window !== 'undefined' ? window : self;
+// @ts-check
 
-{
-    // We need this because the `FinalizationGroup` can't keep itself alive somehow
-    const gcGroups =  new Set()
+if (typeof globalThis === 'undefined') {
+    // @ts-ignore
+    globalThis = typeof window !== 'undefined' ? window:
+        typeof self !== 'undefined' ? self :
+        typeof global !== 'undefined' ? global :
+        (new Function('return this'))()
+}
 
-    const I32_PARENT_LOCK_INDEX = 0
-    const I32_CHILD_LOCK_INDEX = 1
-    const I32_DATA_LENGTH_INDEX = 2
-    const I32_DATA_INDEX = 3
-    const DATA_LENGTH_LIMIT = 1024 * 1024 - 8
-    const SYNC_WAIT_TIMEOUT = 10
-
-    const COMMANDS = {
-        GET_ROOT: 'GET_ROOT',
-        GET_PROPERTY: 'GET_PROPERTY',
-        GET_OWN_KEYS: 'GET_OWN_KEYS',
-        GET_OWN_PROPERTY_DESCRIPTOR: 'GET_OWN_PROPERTY_DESCRIPTOR',
-        SET_PROPERTY: 'SET_PROPERTY',
-        APPLY: 'APPLY',
-        CONSTRUCT: 'CONSTRUCT',
-        UNREF: 'UNREF'
-    }
-
-    const TYPES = {
-        NUMBER: 'NUMBER',
-        BOOLEAN: 'NUMBER',
-        STRING: 'STRING',
-        NULL: 'NULL',
-        UNDEFINED: 'UNDEFINED',
-        OBJECT: 'OBJECT',
-        FUNCTION: 'FUNCTION'
-    }
-
-    const decoder = new TextDecoder()
-    const encoder = new TextEncoder()
+globalThis.DomProxy = {
     /**
-     * @param {ArrayBuffer} buffer
-     */
-    function parse(buffer, offset, length) {
-        var slice = buffer.slice(offset, offset + length)
-        var text = decoder.decode(new Uint8Array(new Uint8Array(slice)))
-        return text
-    }
-
-    function write(buffer, offset, text) {
-        var encodedBuffer = encoder.encode(text)
-        new Uint8Array(buffer).set(encodedBuffer, offset)
-
-        return encodedBuffer.byteLength
-    }
-
-    let refId = 0
-
-    function destructValue(value, refMap, backMap) {
-        if (value === null) {
-            return { type: TYPES.NULL }
-        } else if (value === undefined) {
-            return { type: TYPES.UNDEFINED }
-        } else {
-            switch (typeof value) {
-                case "boolean":
-                    return { type: TYPES.BOOLEAN, value: value }
-                case "number":
-                    return { type: TYPES.NUMBER, value: value }
-                case "string":
-                    return { type: TYPES.STRING, value: value }
-                case "function":
-                case "object":
-                    var id
-                    if (!backMap.has(value)) {
-                        id = refId++
-                        refMap.set(id, value)
-                        backMap.set(value, id)
-                    } else {
-                        id = backMap.get(value)
-                    }
-
-                    if (typeof value === 'function') {
-                        return { type: TYPES.FUNCTION, ref: id }
-                    } else {
-                        return { type: TYPES.OBJECT, ref: id }
-                    }
+    * create the dom proxy
+    * @param {Int32Array} ia32 
+    * @param {()=>any} getRoot 
+    */   
+    create: function create(ia32, getRoot) {
+        const rpc = listen(listener, ia32)
+    
+        const currentThread = rpc.current
+        const rpcSend = /** @type {RpcSend} */(rpc.send)
+    
+        const rpcSendMayThrow = /** @type {RpcSendWithThrow} */(
+            (
+            /** @type {number} */to, 
+            /** @type {Command} */command
+            ) => {
+                if (to === currentThread) {
+                    console.trace('you can\'t send to yourself!!!')
+                    debugger
+                    throw new Error('err')
+                }
+                // @ts-ignore
+                var result = rpcSend(to, command)
+                if (result.error != null) {
+                    throw convertToRaw(result.error)
+                }
+                return result
             }
+        )
+    
+        let currentObjectId = 1;
+    
+        /**
+         * split the owner and object id
+         * @param {number} num 
+         */
+        function getOwnerAndId(num) {
+            return [num & 0xff, (num & 0xffffff00) >> 8]
         }
-    }
-
-    function constructValue(result, refMap, backMap) {
-        switch (result.type) {
-            case TYPES.NUMBER:
-            case TYPES.BOOLEAN:
-            case TYPES.STRING:
-                return result.value
-            case TYPES.NULL:
-                return null
-            case TYPES.UNDEFINED:
-                return undefined
-            case TYPES.OBJECT:
-                return refMap.get(result.ref)
-            case TYPES.FUNCTION:
-                return refMap.get(result.ref)
+    
+        /**
+         * merge the owner and object id
+         * @param {number} owner 
+         * @param {number} id 
+         */
+        function getMergedId(owner, id) {
+            return owner | (id << 8)
         }
-    }
-
-    function constructProxiedValue(result, createProxy) {
-        switch (result.type) {
-            case TYPES.NUMBER:
-            case TYPES.BOOLEAN:
-            case TYPES.STRING:
-                return result.value
-            case TYPES.NULL:
-                return null
-            case TYPES.UNDEFINED:
-                return undefined
-            case TYPES.OBJECT:
-                return createProxy(result.ref)
-            case TYPES.FUNCTION:
-                return createProxy(result.ref, TYPES.FUNCTION)
-        }
-    }
-
-    function destructProxiedValue(value, idMap) {
-        if (value === null) {
-            return { type: TYPES.NULL }
-        } else if (value === undefined) {
-            return { type: TYPES.UNDEFINED }
-        } else {
-            switch (typeof value) {
-                case "boolean":
-                    return { type: TYPES.BOOLEAN, value }
-                case "number":
-                    return { type: TYPES.NUMBER, value }
-                case "string":
-                    return { type: TYPES.STRING, value }
-                case "function":
-                case "object":
-                    var id
-
-                    if (!idMap.has(value)) {
-                        throw new TypeError('context error, not a proxied object')
-                    }
-                    
-                    id = idMap.get(value)
-                    
-                    if (typeof value === 'function') {
-                        return { type: TYPES.FUNCTION, ref: id }
-                    } else {
-                        return { type: TYPES.OBJECT, ref: id }
-                    }
-            }
-        }
-    }
-
-    var DOMProxy = global.DOMProxy = {
-        utils: {
-            parse,
-            write
-        },
-        gcGroups,
-        constants: {
-            OFFSETS: {
-                I32_PARENT_LOCK_INDEX,
-                I32_CHILD_LOCK_INDEX,
-                I32_DATA_LENGTH_INDEX,
-                I32_DATA_INDEX
-            },
-            LIMITS: {
-                DATA_LENGTH_LIMIT
-            },
-            COMMANDS,
-            TYPES
-        },
-        createHost(rootObject = window, { syncWait = false } = { syncWait: false }) {
+    
+        /**
+         * @extends { WeakMap<T, U> }
+         * @template {{}} T
+         * @template U
+         */
+        class AutoMap extends WeakMap {
             /**
-             * @type {ArrayBuffer}
+             * @param {U} defaultValue 
              */
-            const buffer = new SharedArrayBuffer(1024 * 1024)
-            const int32 = new Int32Array(buffer);
-            const dataView = new DataView(buffer)
-
-            let id = 0
-
-            const payload = {
-                constants: {
-                    I32_PARENT_LOCK_INDEX,
-                    I32_CHILD_LOCK_INDEX,
-                    I32_DATA_LENGTH_INDEX,
-                    I32_DATA_INDEX,
-                    DATA_LENGTH_LIMIT
-                },
-                buffer,
-                int32,
-                dataView
+            constructor(defaultValue) {
+                super()
+                this.defaultValue = defaultValue
             }
-
-            function tryWaitSync(int32, I32_PARENT_LOCK_INDEX, old, timeout) {
-                const start = performance.now()
-
-                try {
-                    return Atomics.wait(int32, I32_PARENT_LOCK_INDEX, old, timeout)
-                } catch (err) { }
-
-                while (Atomics.load(int32, I32_PARENT_LOCK_INDEX) === old) {
-                    if (performance.now() - start >= timeout) {
-                        return 'timed-out'
-                    }
-                }
-
-                //console.log('not-equal')
-                return 'not-equal'
+            /**
+             * @param {T} key 
+             */
+            get(key) {
+                const result = super.get(key)
+                if (result == null) return this.defaultValue;
+                return result
             }
-
-            async function listen(handler) {
-                let old = 0;
-
-                while (true) {
-                    if (syncWait) {
-                        if (tryWaitSync(int32, I32_PARENT_LOCK_INDEX, old, SYNC_WAIT_TIMEOUT) === 'timed-out') {
-                            await Atomics.waitAsync(int32, I32_PARENT_LOCK_INDEX, old)
-                        }
-                    } else {
-                        await Atomics.waitAsync(int32, I32_PARENT_LOCK_INDEX, old)
-                    }
-
-                    var length = dataView.getUint32(I32_DATA_LENGTH_INDEX * 4)
-                    var text = parse(buffer, I32_DATA_INDEX * 4, length)
-
-                    var writeLength = write(buffer, I32_DATA_INDEX * 4, await handler(text))
-                    dataView.setUint32(I32_DATA_LENGTH_INDEX * 4, writeLength)
-
-                    old = Atomics.load(int32, I32_PARENT_LOCK_INDEX)
-                    Atomics.store(int32, I32_CHILD_LOCK_INDEX, id++)
-                    Atomics.notify(int32, I32_CHILD_LOCK_INDEX)
-                }
-
-            }
-
-            const map = new Map()
-            const backMap = new WeakMap()
-
-            console.debug(map, backMap)
-
-            function format(item) {
-                return destructValue(item, map, backMap)
-            }
-            function unformat(item) {
-                return constructValue(item, map, backMap)
-            }
-
-            listen(function handler(requestText) {
-                var request = JSON.parse(requestText)
-
-                switch (request.command) {
-                    case COMMANDS.GET_ROOT:
-                        return JSON.stringify(format(rootObject))
-                    case COMMANDS.GET_PROPERTY:
-                        var self = map.get(request.self)
-                        var prop = request.prop
-                        return JSON.stringify(format(self[prop]))
-                    case COMMANDS.GET_OWN_KEYS:
-                        var self = map.get(request.self)
-                        var keys = Reflect.ownKeys(self).filter(i => typeof i === 'string')
-                        return JSON.stringify(keys)
-                    case COMMANDS.GET_OWN_PROPERTY_DESCRIPTOR:
-                        var self = map.get(request.self)
-                        var prop = request.prop
-                        var desc = Object.getOwnPropertyDescriptor(self, prop)
-                        delete desc.value
-                        delete desc.get
-                        delete desc.set
-                        return JSON.stringify(desc)
-                    case COMMANDS.UNREF:
-                        var self = map.get(request.ref)
-                        map.delete(request.ref)
-                        backMap.delete(self)
-                        return JSON.stringify({ success: true })
-                    case COMMANDS.SET_PROPERTY:
-                        var self = unformat(request.self)
-                        var prop = request.prop
-                        var value = unformat(request.value)
-
-                        try {
-                            self[prop] = value
-                            return JSON.stringify(true)
-                        } catch (err) {
-                            return JSON.stringify(false)
-                        }
-                    case COMMANDS.APPLY:
-                        var func = unformat(request.func)
-                        var self = unformat(request.self)
-                        var args = request.args.map(unformat)
-                        return JSON.stringify(format(Reflect.apply(func, self, args)))
-                    case COMMANDS.CONSTRUCT:
-                        var func = unformat(request.func)
-                        var args = request.args.map(unformat)
-                        return JSON.stringify(format(new func(...args)))
-                }
-
-                return '{"error":"not implement"}'
-            })
-
-            return payload
-        },
-
-        createProxy(payload) {
-
-            var data = payload
-            var buffer = data.buffer
-            var int32 = data.int32
-            var constants = data.constants
-            var dataView = data.dataView
-            let id = 0
-
-            var send = (text) => {
-                var length = write(buffer, constants.I32_DATA_INDEX * 4, text)
-                dataView.setUint32(constants.I32_DATA_LENGTH_INDEX * 4, length)
-
-                const old = Atomics.load(int32, constants.I32_CHILD_LOCK_INDEX)
-                Atomics.store(int32, constants.I32_PARENT_LOCK_INDEX, id++)
-                Atomics.notify(int32, constants.I32_PARENT_LOCK_INDEX)
-                Atomics.wait(int32, constants.I32_CHILD_LOCK_INDEX, old)
-
-                var length = dataView.getUint32(constants.I32_DATA_LENGTH_INDEX * 4)
-                var text = parse(buffer, constants.I32_DATA_INDEX * 4, length)
-
-                return text
-            }
-
-            const proxies = new Map()
-            const idMap = new WeakMap()
-
-            function createCleaner() {
-                var gcGroup = new FinalizationGroup((refIds) => {
-                    gcGroups.delete(gcGroup)
-                    for (let refId of refIds) {
-                        proxies.delete(refId)
-                        send(JSON.stringify({ command: COMMANDS.UNREF, ref: refId }))
-                    }
-                })
-
-                gcGroups.add(gcGroup)
-                return gcGroup
-            }
-
-            function createProxy(refId, type = TYPES.OBJECT) {
-                if (proxies.has(refId)) {
-                    return proxies.get(refId).deref()
-                }
-
-                var proxy = new Proxy(type === TYPES.FUNCTION ? function () {} : {}, {
-                    get: function (target, prop, receiver) {
-                        var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_PROPERTY, self: refId, prop: prop })))
-                        return constructProxiedValue(result, createProxy)
-                    },
-                    ownKeys: function (target) {
-                        var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_OWN_KEYS, self: refId })))
-                        return result;
-                    },
-                    getOwnPropertyDescriptor(target, prop) {
-                        var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_OWN_PROPERTY_DESCRIPTOR, self: refId, prop })))
-                        return Object.assign(result, { configurable: true })
-                    },
-                    set: function (target, prop, value) {
-                        var request = {
-                            command: COMMANDS.SET_PROPERTY,
-                            self: { ref: refId, type },
-                            prop,
-                            value: destructProxiedValue(value, idMap)
-                        }
-
-                        var result = JSON.parse(send(JSON.stringify(request)))
-
-                        return result
-                    },
-                    apply: function (target, thisArg, argumentsList) {
-                        var request = {
-                            command: COMMANDS.APPLY,
-                            func: { ref: refId, type },
-                            self: destructProxiedValue(thisArg, idMap),
-                            args: argumentsList.map(value => {
-                                return destructProxiedValue(value, idMap)
-                            })
-                        }
-
-                        var result = JSON.parse(send(JSON.stringify(request)))
-
-                        return constructProxiedValue(result, createProxy)
-                    },
-                    construct(target, argumentsList) {
-                        var request = {
-                            command: COMMANDS.CONSTRUCT,
-                            func: { ref: refId, type },
-                            args: argumentsList.map(value => {
-                                return destructProxiedValue(value, idMap)
-                            })
-                        }
-
-                        var result = JSON.parse(send(JSON.stringify(request)))
-                        return constructProxiedValue(result, createProxy)
-                    }
-                })
-
-                const finalizerGroup = createCleaner(send, proxies)
-
-                finalizerGroup.register(proxy, refId)
-                proxies.set(refId, new WeakRef(proxy))
-                idMap.set(proxy, refId)
-                return proxy
-            }
-
-            function getRoot() {
-                var result = JSON.parse(send(JSON.stringify({ command: COMMANDS.GET_ROOT })))
-                return createProxy(result.ref)
-            }
-
-            return getRoot()
         }
-    }
+    
+        /**
+         * @type {AutoMap<any, number>}
+         */
+        const selfRefs = new AutoMap(0)
+    
+        /**
+         * @type {Map<number, any>}
+         */
+        const selfIdToItem = new Map()
+    
+        /**
+         * @type {WeakMap<any, number>}
+         */
+        const selfItemToId = new WeakMap()
+    
+        /**
+         * @type {WeakMap<any, number>}
+         */
+        const remoteObjectToId = new WeakMap()
+    
+        /**
+         * @type {Map<number, WeakRef<any>>}
+         */
+        const remoteIdToObject = new Map()
+    
+        /**
+         * check if it is a remote object
+         * @param {any} obj 
+         * @returns {boolean}
+         */
+        function isRemote(obj) {
+            return remoteObjectToId.has(obj)
+        }
+        /**
+         * check if it is a remote object
+         * @param {number} num 
+         * @returns {boolean}
+         */
+        function isRemoteId(num) {
+            return getOwnerAndId(num)[0] !== currentThread
+        }
+    
+        /**
+         * @type {FinalizationGroup<any, any, number>}
+         */
+        const cleaner = new FinalizationGroup(iter => {
+            for (let id of iter) {
+                remoteIdToObject.delete(id)
+                rpcSend(getOwnerAndId(id)[0], {
+                    type: 'unref',
+                    id
+                })
+            }
+        })
+        
+        DomProxy.__finalizationGroups.push(cleaner)
+    
+        /**
+         * get object from object id
+         * @param {number} id 
+         * @param {null |"function"|"object"} type
+         * @returns {any}
+         */
+        function getObjectFromId(id, type = "object") {
+            if (isRemoteId(id)) {
+                const ref = remoteIdToObject.get(id)
+                if (!ref) {
+                    if (type === null) {
+                        throw new Error('unknown id')
+                    }
+    
+                    const proto = type === 'function' ? function PlaceHolder () {} : {}
+    
+                    rpcSendMayThrow(getOwnerAndId(id)[0], {
+                        type: "ref",
+                        id
+                    })
+    
+                    const proxy = new Proxy(proto, {
+                        get(target, p, receiver) {
+                            if (typeof p === 'symbol') {
+                                throw new Error('not support')
+                            }
+    
+                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertyGet} */({
+                                type: 'get',
+                                id: id,
+                                property: p
+                            })).value)
+                        },
+                        set(target, p, value, receiver) {
+                            if (typeof p === 'symbol') {
+                                throw new Error('not support')
+                            }
+    
+                            return rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertySet} */({
+                                type: 'set',
+                                id: id,
+                                property: p,
+                                value: convertToWrapped(value)
+                            })).success
+                        },
+                        ownKeys(target) {
+                            return rpcSendMayThrow(getOwnerAndId(id)[0], {
+                                type: 'getProperties',
+                                id
+                            }).properties
+                        },
+                        getOwnPropertyDescriptor(target, p) {
+                            const res = rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertyGetDescriptor} */({
+                                type: "getDescriptor",
+                                id,
+                                property: p
+                            })).descriptor
+
+                            if (res.descriptorType === 'accessor') {
+                                return {
+                                    enumerable: res.enumerable,
+                                    // configurable: res.configurable,
+                                    // because configurable false with unmatched value with placeholder will throw
+                                    configurable: true,
+                                    set: convertToRaw(res.set),
+                                    get: convertToRaw(res.get)
+                                }
+                            } else {
+                                return {
+                                    enumerable: res.enumerable,
+                                    // configurable: res.configurable,
+                                    // because configurable false with unmatched value with placeholder will throw
+                                    configurable: true,
+                                    writable: res.writable,
+                                    value: convertToRaw(res.value)
+                                }
+                            }
+                        },
+                        construct(target, argArray, newTarget) {
+                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandConstruct} */({
+                                type: "construct",
+                                self: convertToWrapped(newTarget),
+                                args: argArray.map(convertToWrapped),
+                                fn: /** @type { ValueObject|ValueFunction } */({
+                                    type,
+                                    ref: id
+                                })
+                            })).value)
+                        },
+                        apply(target, thisArg, argArray) {
+                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandCall} */({
+                                type: "call",
+                                self: convertToWrapped(thisArg),
+                                args: argArray.map(convertToWrapped),
+                                fn: /** @type { ValueObject|ValueFunction } */({
+                                    type,
+                                    ref: id
+                                })
+                            })).value)
+                        }
+                    })
+                    
+                    remoteIdToObject.set(id, new WeakRef(proxy))
+                    remoteObjectToId.set(proxy, id)
+                    cleaner.register(proxy, id, proxy)
+                    return proxy
+                }
+
+                return ref.deref()
+            } else {
+                return selfIdToItem.get(id)
+            }
+        }
+    
+        /**
+         * get object id from object
+         * @param {any} obj 
+         * @returns {number}
+         */
+        function getIdFromObject(obj) {
+            if (isRemote(obj)) {
+                const id = remoteObjectToId.get(obj)
+                if (id == null) {
+                    throw new Error("BUG: unmapped remote object " + obj)
+                }
+                return id
+            } else {
+                if (selfItemToId.has(obj)) {
+                    return /** @type {number} */(selfItemToId.get(obj))
+                }
+    
+                const newId = currentObjectId++
+                const merged = getMergedId(currentThread, newId)
+                if (typeof obj !== 'function' && typeof obj !== 'object') debugger
+                selfIdToItem.set(merged, obj)
+                selfItemToId.set(obj, merged)
+                selfRefs.set(obj, 0)
+                return merged
+            }
+        }
+    
+        /**
+         * 
+         * @param {any} arg 
+         * @returns {Value}
+         */
+        function convertToWrapped(arg) {
+            // null and undefined
+            if (arg == null) {
+                return {
+                    type: "primitive",
+                    value: arg
+                }
+            }
+            switch (typeof arg) {
+                case "boolean":
+                case "string":
+                case "number":
+                    return {
+                        type: "primitive",
+                        value: arg
+                    }
+                case "object":
+                    return {
+                        type: "object",
+                        ref: getIdFromObject(arg)
+                    }
+                case "function":
+                    return {
+                        type: "function",
+                        ref: getIdFromObject(arg)
+                    }
+            }
+            throw new Error("unimplemented")
+        }
+    
+        /**
+         * 
+         * @param {Value} arg 
+         * @returns {any}
+         */
+        function convertToRaw(arg) {
+            switch (arg.type) {
+                case "primitive":
+                    return arg.value
+                case "object":
+                    return getObjectFromId(arg.ref, "object")
+                case "function":
+                    return getObjectFromId(arg.ref, "function")
+            }
+            throw new Error("unimplemented")
+        }
+        
+        /**
+         * handle remote request
+         * @param {number} from 
+         * @param {Command} message 
+         * @returns {DomProxyResponse}
+         */
+        function listener(from, message) {
+            try {
+                switch (message.type) {
+                    case "root":
+                        return {
+                            value: convertToWrapped(getRoot())
+                        }
+                    case "get":
+                        return {
+                            value: convertToWrapped(getObjectFromId(message.id)[message.property])
+                        }
+                    case "set":
+                        getObjectFromId(message.id)[message.property] = convertToRaw(message.value)
+    
+                        return {
+                            success: true
+                        }
+                    case "ref":
+                        var object = getObjectFromId(message.id)
+                        var old = selfRefs.get(object)
+                        selfRefs.set(object, old + 1)
+                        return {}
+                    case "unref":
+                        var object = getObjectFromId(message.id)
+                        var old = selfRefs.get(object)
+                        var newValue = old - 1
+                        if (newValue === 0) {
+                            selfRefs.delete(object)
+                            selfIdToItem.delete(message.id)
+                            selfItemToId.delete(object)
+                        } else {
+                            selfRefs.set(object, newValue)
+                        }
+                        return {}
+                    case "getDescriptor":
+                        var object = getObjectFromId(message.id)
+                        var des = Object.getOwnPropertyDescriptor(object, message.property)
+                        if (!des) throw "unknown property " + message.property
+                        if (des.get != null) {
+                            return {
+                                descriptor: {
+                                    descriptorType: 'accessor',
+                                    enumerable: des.enumerable,
+                                    configurable: des.configurable,
+                                    get: convertToWrapped(des.get),
+                                    set: convertToWrapped(des.set)
+                                }
+                            }
+                        } else {
+                            return {
+                                descriptor: {
+                                    descriptorType: 'value',
+                                    enumerable: des.enumerable,
+                                    configurable: des.configurable,
+                                    writable: des.writable,
+                                    value: convertToWrapped(des.value)
+                                }
+                            }
+                        }
+                    case "getProperties":
+                        var object = getObjectFromId(message.id)
+                        return {
+                            properties: /** @type {string[]} */(Reflect.ownKeys(object).filter(i => typeof i === 'string'))
+                        }
+                    case "construct":
+                        var fn = convertToRaw(message.fn)
+                        var self = convertToRaw(message.self)
+                        var args = message.args.map(convertToRaw)
+                        return {
+                            value: convertToWrapped(Reflect.construct(fn, args, self))
+                        }
+                    case "call":
+                        var fn = convertToRaw(message.fn)
+                        var self = convertToRaw(message.self)
+                        var args = message.args.map(convertToRaw)
+                        return {
+                            value: convertToWrapped(Reflect.apply(fn, self, args))
+                        }
+                }
+            } catch (err) {
+                console.error(err)
+                debugger
+                return {
+                    error: convertToWrapped(err)
+                }
+            }
+    
+            return {
+                error: "not implemented method " + /** @type { any } */(message).type
+            }
+        }
+    
+        /**
+         * get remote root
+         * @param {number} target 
+         */
+        function getRemoteRoot(target) {
+            return convertToRaw(rpcSendMayThrow(target, {
+                type: 'root'
+            }).value)
+        }
+        
+        return {
+            current: rpc.current,
+            getRemote: getRemoteRoot
+        }
+    },
+    __finalizationGroups: /** @type { FinalizationGroup<any, any, number>[] } */([])
 }
