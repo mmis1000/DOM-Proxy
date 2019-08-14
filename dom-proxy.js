@@ -236,7 +236,8 @@ globalThis.DomProxy = {
                     cleaner.register(proxy, id, proxy)
                     return proxy
                 }
-                return ref.get()
+
+                return ref.deref()
             } else {
                 return selfIdToItem.get(id)
             }

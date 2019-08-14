@@ -1,6 +1,6 @@
 declare class WeakRef<T> {
     constructor (val: T)
-    get(): T|undefined
+    deref(): T|undefined
 }
 
 /**

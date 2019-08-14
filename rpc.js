@@ -14,7 +14,7 @@ if (typeof setImmediate === 'undefined') {
  * @param {(from: number, message: any)=>any} handler 
  * @param {Int32Array} ia32 
  */
-function listen(handler, ia32, DEBUG = false) {
+function listen(handler, ia32, DEBUG = true) {
     /**
      * 
      * @param {*} msg 
@@ -323,9 +323,17 @@ function listen(handler, ia32, DEBUG = false) {
         const messageSize = Atomics.load(ia32, OFFSET_BUFFER_SIZE)
         const message = getMessage(ia32, messageSize)
 
-        threadState = THREAD_STATE_BLOCKING
-        const response = handler(from, message)
-        threadState = THREAD_STATE_NORMAL
+        let response
+
+        if (threadState === THREAD_STATE_BLOCKING) {
+            response = handler(from, message)
+        } else {
+            log('THREAD BLOCKING 1')
+            threadState = THREAD_STATE_BLOCKING
+            response = handler(from, message)
+            log('THREAD NORMAL 1')
+            threadState = THREAD_STATE_NORMAL
+        }
 
         const size = setMessage(ia32, response)
         Atomics.store(ia32, OFFSET_BUFFER_SIZE, size)
@@ -391,7 +399,7 @@ function listen(handler, ia32, DEBUG = false) {
             } while (to !== currentThread)
 
             if (field(GIL, MASK_STATE) === STATE_RESPONSE && from === target) {
-                log('response polled')
+                log('response polled', new Error().stack)
                 explainGIL(GIL)
                 return getMessage(ia32, Atomics.load(ia32, OFFSET_BUFFER_SIZE))
             } else if (field(GIL, MASK_STATE) === STATE_SEND) {
@@ -496,6 +504,7 @@ function listen(handler, ia32, DEBUG = false) {
 
             // try acquire GIL
             let { success, current: currentGIL } = acquireGIL(ia32, OFFSET_GIL, currentThread)
+            log('THREAD BLOCKING 2')
             threadState = THREAD_STATE_BLOCKING
 
             if (!success) {
@@ -531,6 +540,7 @@ function listen(handler, ia32, DEBUG = false) {
             // log('start to send request at #' + current)
             const result = actualSend()
 
+            log('THREAD NORMAL 2')
             threadState = THREAD_STATE_NORMAL
 
             log('release')

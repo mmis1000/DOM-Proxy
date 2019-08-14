@@ -5,6 +5,7 @@ importScripts('./dom-proxy.js')
 let ia32
 let host
 let window
+let document
 self.addEventListener('message', event => {
     var data = event.data
 
@@ -16,6 +17,7 @@ self.addEventListener('message', event => {
         current = proxy.current
         
         window = proxy.getRemote(data.host)
+        document = window.document
 
         self.postMessage({
             command: 'ready',
@@ -26,6 +28,15 @@ self.addEventListener('message', event => {
 
         window.run = function () {
             window.alert('how the fuck?')
+            var el = document.createElement("div")
+            el.textContent = "click me"
+            console.log('break')
+            el.addEventListener('click', () => {
+                window.alert('callback in worker')
+            })
+            document.body.appendChild(el)
+            console.log(document.body.innerHTML)
+            console.log('yep')
         }
     }
 })
