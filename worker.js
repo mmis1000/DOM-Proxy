@@ -19,12 +19,11 @@ self.addEventListener('message', event => {
         window = proxy.getRemote(data.host)
         document = window.document
 
-        self.postMessage({
-            command: 'ready',
-            current
-        })
-
         self.test = '1'
+
+        console.log(window.location.href)
+        console.log(window.document.title)
+        console.log(window.document === window.document)
 
         window.run = function () {
             window.alert('how the fuck?')
@@ -40,5 +39,10 @@ self.addEventListener('message', event => {
             console.log(Object.keys(window))
             console.log(Object.keys(document))
         }
+
+        self.postMessage({
+            command: 'ready',
+            current
+        })
     }
 })
