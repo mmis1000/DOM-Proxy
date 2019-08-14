@@ -14,7 +14,7 @@ if (typeof setImmediate === 'undefined') {
  * @param {(from: number, message: any)=>any} handler 
  * @param {Int32Array} ia32 
  */
-function listen(handler, ia32, DEBUG = false) {
+function listen(handler, ia32, DEBUG = true) {
     /**
      * 
      * @param {*} msg 
@@ -117,6 +117,7 @@ function listen(handler, ia32, DEBUG = false) {
         }
     }
 
+    const LIMIT = 2000
     /**
      * Wait sync
      * @param {Int32Array} ia32
@@ -136,7 +137,7 @@ function listen(handler, ia32, DEBUG = false) {
         } catch (err) { }
 
         while (Atomics.load(ia32, offset) === old) {
-            if (performance.now() - start >= timeout) {
+            if (performance.now() - start >= Math.min(LIMIT, timeout)) {
                 return 'timed-out'
             }
         }
@@ -469,6 +470,10 @@ function listen(handler, ia32, DEBUG = false) {
                 targetThread << MASK_OFFSET[MASK_TO] |
                 STATE_SEND << MASK_OFFSET[MASK_STATE]
 
+            if (currentThread === targetThread) {
+                console.trace('you can\'t send to yourself!!!')
+                throw new Error('err')
+            }
 
             log(`send from #${currentThread} to #${targetThread}`)
             
@@ -549,12 +554,4 @@ function listen(handler, ia32, DEBUG = false) {
             return send(ia32, current, targetThread, message)
         }
     } 
-}
-/**
- * 
- * @param {number} from 
- * @param {any} message 
- */
-function handler(from, message) {
-    // TODO
 }

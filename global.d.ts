@@ -1,5 +1,17 @@
-declare class WeakReference<T> {
+declare class WeakRef<T> {
+    constructor (val: T)
     get(): T|undefined
+}
+
+/**
+ * @template T Value
+ * @template U Unregister token
+ * @template V Holding value
+ */
+declare class FinalizationGroup<T, U, V> {
+    constructor (cb: (iter: Iterable<V>)=>void)
+    register(target: T, holding: V, token: U): void
+    unregister(token: U): void
 }
 
 interface ValuePrimitive {
@@ -65,7 +77,7 @@ type Command =
     CommandProperties
 
 interface ResponseGetRoot {
-    id: number
+    value: Value
 }
 
 interface ResponseRef {
@@ -84,8 +96,17 @@ interface ResponsePropertySet {
     success: boolean
 }
 
+interface mappedDescriptor {
+    get: Value,
+    set: Value,
+    configurable: boolean | undefined,
+    enumerable: boolean | undefined,
+    writable: boolean | undefined,
+    value: Value
+}
+
 interface ResponsePropertyGetDescriptor {
-    descriptor: PropertyDescriptor
+    descriptor: mappedDescriptor
 }
 
 interface ResponseProperties {
@@ -114,5 +135,26 @@ interface RpcSend {
     (target: number, command: CommandProperties): ResponseProperties | ResponseError
 }
 
+type RpcSendWithThrow = {
+    (target: number, command: CommandGetRoot): ResponseGetRoot
+    (target: number, command: CommandRef): ResponseRef
+    (target: number, command: CommandUnref): ResponseUnref
+    (target: number, command: CommandPropertyGet): ResponsePropertyGet
+    (target: number, command: CommandPropertySet): ResponsePropertySet
+    (target: number, command: CommandPropertyGetDescriptor): ResponsePropertyGetDescriptor
+    (target: number, command: CommandProperties): ResponseProperties
+}
+
 declare function setImmediate(fn: (...arg: any[])=>void): number
 declare function clearImmediate(id: number): void
+
+
+declare module global {
+    interface globalThis {
+        DomProxy: any
+    }
+
+    namespace globalThis {
+        var DomProxy: any
+    }
+}
