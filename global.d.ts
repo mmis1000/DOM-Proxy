@@ -113,14 +113,23 @@ interface ResponsePropertySet {
     success: boolean
 }
 
-interface mappedDescriptor {
+interface mappedDescriptorAcc {
+    descriptorType: 'accessor',
     get: Value,
     set: Value,
+    configurable: boolean | undefined,
+    enumerable: boolean | undefined
+}
+
+interface mappedDescriptorVal {
+    descriptorType: 'value',
     configurable: boolean | undefined,
     enumerable: boolean | undefined,
     writable: boolean | undefined,
     value: Value
 }
+
+type mappedDescriptor = mappedDescriptorAcc | mappedDescriptorVal
 
 interface ResponsePropertyGetDescriptor {
     descriptor: mappedDescriptor

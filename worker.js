@@ -37,6 +37,8 @@ self.addEventListener('message', event => {
             document.body.appendChild(el)
             console.log(document.body.innerHTML)
             console.log('yep')
+            console.log(Object.keys(window))
+            console.log(Object.keys(document))
         }
     }
 })

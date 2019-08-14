@@ -196,15 +196,24 @@ globalThis.DomProxy = {
                                 property: p
                             })).descriptor
 
-                            return {
-                                enumerable: res.enumerable,
-                                // configurable: res.configurable,
-                                // because configurable false with unmatched value with placeholder will throw
-                                configurable: true,
-                                writable: res.writable,
-                                value: convertToRaw(res.value),
-                                set: convertToRaw(res.set),
-                                get: convertToRaw(res.get)
+                            if (res.descriptorType === 'accessor') {
+                                return {
+                                    enumerable: res.enumerable,
+                                    // configurable: res.configurable,
+                                    // because configurable false with unmatched value with placeholder will throw
+                                    configurable: true,
+                                    set: convertToRaw(res.set),
+                                    get: convertToRaw(res.get)
+                                }
+                            } else {
+                                return {
+                                    enumerable: res.enumerable,
+                                    // configurable: res.configurable,
+                                    // because configurable false with unmatched value with placeholder will throw
+                                    configurable: true,
+                                    writable: res.writable,
+                                    value: convertToRaw(res.value)
+                                }
                             }
                         },
                         construct(target, argArray, newTarget) {
@@ -366,14 +375,25 @@ globalThis.DomProxy = {
                         var object = getObjectFromId(message.id)
                         var des = Object.getOwnPropertyDescriptor(object, message.property)
                         if (!des) throw "unknown property " + message.property
-                        return {
-                            descriptor: {
-                                enumerable: des.enumerable,
-                                configurable: des.configurable,
-                                writable: des.writable,
-                                value: convertToWrapped(des.value),
-                                get: convertToWrapped(des.get),
-                                set: convertToWrapped(des.set)
+                        if (des.get != null) {
+                            return {
+                                descriptor: {
+                                    descriptorType: 'accessor',
+                                    enumerable: des.enumerable,
+                                    configurable: des.configurable,
+                                    get: convertToWrapped(des.get),
+                                    set: convertToWrapped(des.set)
+                                }
+                            }
+                        } else {
+                            return {
+                                descriptor: {
+                                    descriptorType: 'value',
+                                    enumerable: des.enumerable,
+                                    configurable: des.configurable,
+                                    writable: des.writable,
+                                    value: convertToWrapped(des.value)
+                                }
                             }
                         }
                     case "getProperties":
