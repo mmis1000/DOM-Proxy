@@ -59,6 +59,8 @@ Host
 
 Worker
 ```js
+importScripts('await-async.js')
+importScripts('rpc.js')
 importScripts('dom-proxy.js')
 
 self.addEventListener('message', function (event) {
