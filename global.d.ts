@@ -38,9 +38,18 @@ interface CommandRef {
     id: number
 }
 
+interface CommandRefMany {
+    type: 'ref-many'
+    ids: number[]
+}
+
 interface CommandUnref {
     type: 'unref'
     id: number
+}
+interface CommandUnrefMany {
+    type: 'unref-many'
+    ids: number[]
 }
 
 interface CommandPropertyGet {
@@ -85,7 +94,9 @@ interface CommandCall {
 type Command = 
     CommandGetRoot |
     CommandRef |
+    CommandRefMany |
     CommandUnref |
+    CommandUnrefMany |
     CommandPropertyGet |
     CommandPropertySet |
     CommandPropertyGetDescriptor |
@@ -137,6 +148,7 @@ interface ResponsePropertyGetDescriptor {
 
 interface ResponseProperties {
     properties: string[]
+    preloadDescriptor: { [key: string ]: mappedDescriptor }
 }
 
 interface ResponseError {
@@ -164,7 +176,9 @@ type DomProxyResponse =
 interface RpcSend {
     (target: number, command: CommandGetRoot): ResponseGetRoot | ResponseError
     (target: number, command: CommandRef): ResponseRef | ResponseError
+    (target: number, command: CommandRefMany): ResponseRef | ResponseError
     (target: number, command: CommandUnref): ResponseUnref | ResponseError
+    (target: number, command: CommandUnrefMany): ResponseUnref | ResponseError
     (target: number, command: CommandPropertyGet): ResponsePropertyGet | ResponseError
     (target: number, command: CommandPropertySet): ResponsePropertySet | ResponseError
     (target: number, command: CommandPropertyGetDescriptor): ResponsePropertyGetDescriptor | ResponseError
@@ -176,7 +190,9 @@ interface RpcSend {
 type RpcSendWithThrow = {
     (target: number, command: CommandGetRoot): ResponseGetRoot
     (target: number, command: CommandRef): ResponseRef
+    (target: number, command: CommandRefMany): ResponseRef
     (target: number, command: CommandUnref): ResponseUnref
+    (target: number, command: CommandUnrefMany): ResponseUnref
     (target: number, command: CommandPropertyGet): ResponsePropertyGet
     (target: number, command: CommandPropertySet): ResponsePropertySet
     (target: number, command: CommandPropertyGetDescriptor): ResponsePropertyGetDescriptor

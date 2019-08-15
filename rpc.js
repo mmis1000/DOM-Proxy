@@ -527,6 +527,8 @@ function listen(handler, ia32) {
     return {
         current,
         send (/** @type {number} */targetThread, /** @type {any} */message) {
+            // I really don't know why, but leave this here makes chrome happy
+            console.debug(message)
             return send(ia32, current, targetThread, message)
         }
     } 

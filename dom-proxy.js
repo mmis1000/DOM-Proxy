@@ -127,17 +127,151 @@ globalThis.DomProxy = {
          * @type {FinalizationGroup<any, any, number>}
          */
         const cleaner = new FinalizationGroup(iter => {
-            for (let id of iter) {
-                remoteIdToObject.delete(id)
-                rpcSend(getOwnerAndId(id)[0], {
-                    type: 'unref',
-                    id
-                })
-            }
+            batchUnref(() => {
+                for (let id of iter) {
+                    remoteIdToObject.delete(id)
+                    unrefRemote(id)
+                }
+            })
         })
         
         DomProxy.__finalizationGroups.push(cleaner)
     
+
+        let bufferingRefs = false
+
+        /**
+         * @type { number[] }
+         */
+        const bufferedRefs = []
+
+        /**
+         * 
+         * @param {number} id 
+         */
+        function refRemote(id) {
+            if (!bufferingRefs) {
+                return rpcSendMayThrow(getOwnerAndId(id)[0], {
+                    type: "ref",
+                    id
+                })
+            } else {
+                bufferedRefs.push(id)
+                return {}
+            }
+        }
+        
+
+
+        /**
+         * 
+         * @param {(...args:any[])=>void} cb 
+         */
+        function batchRef(cb) {
+            if (bufferingRefs) {
+                cb()
+            } else {
+                bufferingRefs = true
+                cb()
+                bufferingRefs = false
+                
+                // handle batching here
+                const ids = bufferedRefs.slice(0)
+                bufferedRefs.length = 0
+
+                /**
+                 * @type {Map<number, number[]>}
+                 */
+                const mapByTarget = new Map()
+
+                for (let id of ids) {
+                    const [owner] = getOwnerAndId(id)
+                    const list = mapByTarget.get(owner) || []
+                    list.push(id)
+
+                    if (!mapByTarget.has(owner)) {
+                        mapByTarget.set(owner, list)
+                    }
+                }
+
+                for (let entry of mapByTarget) {
+                    return rpcSendMayThrow(entry[0], {
+                        type: "ref-many",
+                        ids: entry[1]
+                    })
+                }
+            }
+        }
+
+        
+        let bufferingUnrefs = false
+
+        /**
+         * @type { number[] }
+         */
+        const bufferedUnrefs = []
+        /**
+        * 
+        * @param {number} id 
+        */
+        function unrefRemote(id) {
+            if (!bufferingUnrefs) {
+                return rpcSend(getOwnerAndId(id)[0], {
+                    type: 'unref',
+                    id
+                })
+            } else {
+                bufferedUnrefs.push(id)
+                return {}
+            }
+        }
+
+        
+        /**
+         * 
+         * @param {(...args:any[])=>void} cb 
+         */
+        function batchUnref(cb) {
+            if (bufferingUnrefs) {
+                cb()
+            } else {
+                bufferingUnrefs = true
+                cb()
+                bufferingUnrefs = false
+                
+                // handle batching here
+                const ids = bufferedUnrefs.slice(0)
+                bufferedUnrefs.length = 0
+
+                /**
+                 * @type {Map<number, number[]>}
+                 */
+                const mapByTarget = new Map()
+
+                for (let id of ids) {
+                    const [owner] = getOwnerAndId(id)
+                    const list = mapByTarget.get(owner) || []
+                    list.push(id)
+
+                    if (!mapByTarget.has(owner)) {
+                        mapByTarget.set(owner, list)
+                    }
+                }
+
+                for (let entry of mapByTarget) {
+                    return rpcSendMayThrow(entry[0], {
+                        type: "unref-many",
+                        ids: entry[1]
+                    })
+                }
+            }
+        }
+
+        /**
+         * @type { PropertyDescriptorMap | null }
+         */
+        let preloadedDescriptors = null
+
         /**
          * get object from object id
          * @param {number} id 
@@ -154,13 +288,11 @@ globalThis.DomProxy = {
     
                     const proto = type === 'function' ? function PlaceHolder () {} : {}
     
-                    rpcSendMayThrow(getOwnerAndId(id)[0], {
-                        type: "ref",
-                        id
-                    })
+                    refRemote(id)
     
                     const proxy = new Proxy(proto, {
                         get(target, p, receiver) {
+                            preloadedDescriptors = null
                             if (typeof p === 'symbol') {
                                 throw new Error('not support')
                             }
@@ -172,6 +304,7 @@ globalThis.DomProxy = {
                             })).value)
                         },
                         set(target, p, value, receiver) {
+                            preloadedDescriptors = null
                             if (typeof p === 'symbol') {
                                 throw new Error('not support')
                             }
@@ -184,39 +317,44 @@ globalThis.DomProxy = {
                             })).success
                         },
                         ownKeys(target) {
-                            return rpcSendMayThrow(getOwnerAndId(id)[0], {
+                            preloadedDescriptors = null
+                            var res = rpcSendMayThrow(getOwnerAndId(id)[0], {
                                 type: 'getProperties',
                                 id
-                            }).properties
+                            })
+
+                            batchRef(() => {
+                                /**
+                                 * @type { PropertyDescriptorMap }
+                                 */
+                                const map = {}
+
+                                for (let key of Object.keys(res.preloadDescriptor)) {
+                                    map[key] = unmapDescriptor(res.preloadDescriptor[key])
+                                }
+
+                                preloadedDescriptors = map
+                            })
+
+                            return res.properties
                         },
                         getOwnPropertyDescriptor(target, p) {
+                            if (typeof p !== 'string') throw new Error()
+
+                            if (preloadedDescriptors && preloadedDescriptors[p]) {
+                                return preloadedDescriptors[p]
+                            }
+
                             const res = rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertyGetDescriptor} */({
                                 type: "getDescriptor",
                                 id,
                                 property: p
                             })).descriptor
 
-                            if (res.descriptorType === 'accessor') {
-                                return {
-                                    enumerable: res.enumerable,
-                                    // configurable: res.configurable,
-                                    // because configurable false with unmatched value with placeholder will throw
-                                    configurable: true,
-                                    set: convertToRaw(res.set),
-                                    get: convertToRaw(res.get)
-                                }
-                            } else {
-                                return {
-                                    enumerable: res.enumerable,
-                                    // configurable: res.configurable,
-                                    // because configurable false with unmatched value with placeholder will throw
-                                    configurable: true,
-                                    writable: res.writable,
-                                    value: convertToRaw(res.value)
-                                }
-                            }
+                            return unmapDescriptor(res)
                         },
                         construct(target, argArray, newTarget) {
+                            preloadedDescriptors = null
                             return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandConstruct} */({
                                 type: "construct",
                                 self: convertToWrapped(newTarget),
@@ -228,6 +366,7 @@ globalThis.DomProxy = {
                             })).value)
                         },
                         apply(target, thisArg, argArray) {
+                            preloadedDescriptors = null
                             return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandCall} */({
                                 type: "call",
                                 self: convertToWrapped(thisArg),
@@ -332,6 +471,57 @@ globalThis.DomProxy = {
         }
         
         /**
+         * 
+         * @param {PropertyDescriptor} des 
+         * @returns {mappedDescriptor}
+         */
+        function mapDescriptor(des) {
+            if (des.get != null) {
+                return  {
+                    descriptorType: 'accessor',
+                    enumerable: des.enumerable,
+                    configurable: des.configurable,
+                    get: convertToWrapped(des.get),
+                    set: convertToWrapped(des.set)
+                }
+            } else {
+                return {
+                    descriptorType: 'value',
+                    enumerable: des.enumerable,
+                    configurable: des.configurable,
+                    writable: des.writable,
+                    value: convertToWrapped(des.value)
+                }
+            }
+        }
+        /**
+         * 
+         * @param {mappedDescriptor} res 
+         * @returns {PropertyDescriptor}
+         */
+        function unmapDescriptor(res) {
+            if (res.descriptorType === 'accessor') {
+                return {
+                    enumerable: res.enumerable,
+                    // configurable: res.configurable,
+                    // because configurable false with unmatched value with placeholder will throw
+                    configurable: true,
+                    set: convertToRaw(res.set),
+                    get: convertToRaw(res.get)
+                }
+            } else {
+                return {
+                    enumerable: res.enumerable,
+                    // configurable: res.configurable,
+                    // because configurable false with unmatched value with placeholder will throw
+                    configurable: true,
+                    writable: res.writable,
+                    value: convertToRaw(res.value)
+                }
+            }
+        }
+
+        /**
          * handle remote request
          * @param {number} from 
          * @param {Command} message 
@@ -359,6 +549,14 @@ globalThis.DomProxy = {
                         var old = selfRefs.get(object)
                         selfRefs.set(object, old + 1)
                         return {}
+                    case "ref-many":
+                        for (let id of message.ids) {
+                            var object = getObjectFromId(id)
+                            var old = selfRefs.get(object)
+                            selfRefs.set(object, old + 1)
+                        }
+
+                        return {}
                     case "unref":
                         var object = getObjectFromId(message.id)
                         var old = selfRefs.get(object)
@@ -369,6 +567,20 @@ globalThis.DomProxy = {
                             selfItemToId.delete(object)
                         } else {
                             selfRefs.set(object, newValue)
+                        }
+                        return {}
+                    case "unref-many":
+                        for (let id of message.ids) {
+                            var object = getObjectFromId(id)
+                            var old = selfRefs.get(object)
+                            var newValue = old - 1
+                            if (newValue === 0) {
+                                selfRefs.delete(object)
+                                selfIdToItem.delete(id)
+                                selfItemToId.delete(object)
+                            } else {
+                                selfRefs.set(object, newValue)
+                            }
                         }
                         return {}
                     case "getDescriptor":
@@ -398,8 +610,14 @@ globalThis.DomProxy = {
                         }
                     case "getProperties":
                         var object = getObjectFromId(message.id)
+                        var keys = /** @type {string[]} */(Reflect.ownKeys(object).filter(i => typeof i === 'string'))
+                        var descriptors = Object.getOwnPropertyDescriptors(object)
                         return {
-                            properties: /** @type {string[]} */(Reflect.ownKeys(object).filter(i => typeof i === 'string'))
+                            properties: keys,
+                            preloadDescriptor: keys.map(i => /** @type {[String, mappedDescriptor]} */([i, mapDescriptor(descriptors[i])])).reduce((prev, curr) => {
+                                prev[curr[0]] = curr[1]
+                                return prev
+                            }, /** @type {{[key: string]: mappedDescriptor}} */({}))
                         }
                     case "construct":
                         var fn = convertToRaw(message.fn)
