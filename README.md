@@ -12,6 +12,7 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
       2. [Strict equal of proxied same object](#Strict-equal-of-proxied-same-object)
       3. [The garbage collection](#The-garbage-collection)
    2. [Caveats](#Caveats)
+5. [Todos](#TODOS)
 
 
 ## Requirements As of 2019-06-25
@@ -195,3 +196,8 @@ findIdInMapAndDropIt(map, id)
 2. Due to the `FinalizationGroup` and `WeakRef` isn't ship on all stable browser version.
 
    It isn't possible to use this library without edit the browser setting from cli directly currently. (that's why this is a POC, WeakRef can't be polyfilled at all)
+
+## TODOS
+1. Mapping symbol between workers (current throws)
+2. Fix worker count limit (current 256)
+3. Fix object id limit (current 8388608, aka `2**23`)
