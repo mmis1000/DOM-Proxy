@@ -14,14 +14,14 @@ if (typeof setImmediate === 'undefined') {
  * @param {(from: number, message: any)=>any} handler 
  * @param {Int32Array} ia32 
  */
-function listen(handler, ia32, DEBUG = false) {
+function listen(handler, ia32) {
     /**
      * 
      * @param {*} msg 
      * @param  {...any} arg 
      */
     function log (msg, ...arg) {
-        DEBUG && console.debug('[#' + Atomics.add(ia32, OFFSET_LOG_ID, 1) + ']: #' + current + ' ' + msg, ...arg)
+        console.debug('[#' + Atomics.add(ia32, OFFSET_LOG_ID, 1) + ']: #' + current + ' ' + msg, ...arg)
     }
 
     /**
@@ -142,7 +142,6 @@ function listen(handler, ia32, DEBUG = false) {
             }
         }
 
-        //log('not-equal')
         return 'not-equal'
     }
 
@@ -161,9 +160,9 @@ function listen(handler, ia32, DEBUG = false) {
     /**
      * memory layout
      * ```
-     * name   Thread index | GIL   | Thread lock | Buffer size | Data          |
-     * value  int32        | int32 | int32[256]  | int32       | user provided |
-     * size   4            | 4     | 4 * 256     | 4           | All - other   |
+     * name   Thread index | GIL   | Buffer size | Data          |
+     * value  int32        | int32 | int32       | user provided |
+     * size   4            | 4     | 4           | All - other   |
      * ```
      */
 
@@ -216,7 +215,6 @@ function listen(handler, ia32, DEBUG = false) {
      * @param {Int32Array} typedArray
      */
     function releaseGIL(typedArray) {
-        log('set gil to 0')
         Atomics.store(typedArray, OFFSET_GIL, 0)
         Atomics.load(typedArray, OFFSET_GIL)
         Atomics.notify(typedArray, OFFSET_GIL, Infinity)
@@ -305,10 +303,8 @@ function listen(handler, ia32, DEBUG = false) {
         }
 
         if (field(GIL, MASK_STATE) !== STATE_SEND) {
-            log('I am ', current)
             explainGIL(OLD)
             explainGIL(GIL)
-            debugger
             throw new Error('bad state 0x' + state.toString(16))
         }
 
@@ -328,10 +324,8 @@ function listen(handler, ia32, DEBUG = false) {
         if (threadState === THREAD_STATE_BLOCKING) {
             response = handler(from, message)
         } else {
-            log('THREAD BLOCKING 1')
             threadState = THREAD_STATE_BLOCKING
             response = handler(from, message)
-            log('THREAD NORMAL 1')
             threadState = THREAD_STATE_NORMAL
         }
 
@@ -344,7 +338,6 @@ function listen(handler, ia32, DEBUG = false) {
             STATE_RESPONSE << MASK_OFFSET[MASK_STATE]
 
         // send the message via GIL if the target is in block mode
-        log('set gil to ' + newGIL + ' ' + (new Error).stack)
         Atomics.store(ia32, OFFSET_GIL, newGIL)
         Atomics.notify(ia32, OFFSET_GIL, Infinity)
     }
@@ -391,16 +384,12 @@ function listen(handler, ia32, DEBUG = false) {
             do {
                 wait(ia32, OFFSET_GIL, GIL)
                 GIL = Atomics.load(ia32, OFFSET_GIL)
-                log(`try polling response (from ${target} to ${currentThread})`)
-                explainGIL(GIL)
                 to = field(GIL, MASK_TO)
                 from = field(GIL, MASK_FROM)
                 state = field(GIL, MASK_STATE)
             } while (to !== currentThread)
 
             if (field(GIL, MASK_STATE) === STATE_RESPONSE && from === target) {
-                log('response polled', new Error().stack)
-                explainGIL(GIL)
                 return getMessage(ia32, Atomics.load(ia32, OFFSET_BUFFER_SIZE))
             } else if (field(GIL, MASK_STATE) === STATE_SEND) {
                 // we got a side quest
@@ -470,8 +459,6 @@ function listen(handler, ia32, DEBUG = false) {
      * @param {any} message
      */
     function send(ia32, currentThread, targetThread, message) {
-        //log('about to send ' + message + ' at #' + current)
-
         function actualSend() {
             let GIL =
                 currentThread << MASK_OFFSET[MASK_FROM] |
@@ -483,7 +470,6 @@ function listen(handler, ia32, DEBUG = false) {
                 throw new Error('err')
             }
 
-            log(`send from #${currentThread} to #${targetThread}`)
             
             var size = setMessage(ia32, message)
             Atomics.store(ia32, OFFSET_BUFFER_SIZE, size)
@@ -504,13 +490,8 @@ function listen(handler, ia32, DEBUG = false) {
 
             // try acquire GIL
             let { success, current: currentGIL } = acquireGIL(ia32, OFFSET_GIL, currentThread)
-            log('THREAD BLOCKING 2')
-            threadState = THREAD_STATE_BLOCKING
 
-            if (!success) {
-                log('stuck')
-                explainGIL(currentGIL)
-            }
+            threadState = THREAD_STATE_BLOCKING
 
             while (!success) {
                 // handle the state
@@ -522,31 +503,16 @@ function listen(handler, ia32, DEBUG = false) {
                     wait(ia32, OFFSET_GIL, currentGIL)
                 }
 
-
-                log('trying to get lock again')
                 const result = acquireGIL(ia32, OFFSET_GIL, currentThread)
                 success = result.success
                 currentGIL = result.current
-                if (success) {
-                    log('unstuck' )
-                } else {
-                    log('failed unstuck' )
-                    explainGIL(currentGIL)
-                }
             }
 
-            log('gain lock')
-
-            // log('start to send request at #' + current)
             const result = actualSend()
 
-            log('THREAD NORMAL 2')
             threadState = THREAD_STATE_NORMAL
 
-            log('release')
             releaseGIL(ia32)
-            log('released, current GIL(cp) ' + Atomics.compareExchange(ia32, OFFSET_GIL, 0, 0))
-            log('released, current GIL(lo) ' + Atomics.load(ia32, OFFSET_GIL))
 
             return result
         } else {
