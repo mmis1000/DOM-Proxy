@@ -34,6 +34,10 @@ self.addEventListener('message', event => {
                 window.alert('callback in worker')
             })
             document.body.appendChild(el)
+
+            // In worker 0
+            self.callbackFromWorker1()
+
             console.log(document.body.innerHTML)
             console.log('yep')
             console.log(Object.keys(window))
