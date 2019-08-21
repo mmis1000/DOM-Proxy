@@ -117,7 +117,7 @@ function listen(handler, ia32) {
         }
     }
 
-    const LIMIT = 2000
+    const SPIN_LOOP_LIMIT = 100
     /**
      * Wait sync
      * @param {Int32Array} ia32
@@ -137,7 +137,7 @@ function listen(handler, ia32) {
         } catch (err) { }
 
         while (Atomics.load(ia32, offset) === old) {
-            if (performance.now() - start >= Math.min(LIMIT, timeout)) {
+            if (performance.now() - start >= Math.min(SPIN_LOOP_LIMIT, timeout)) {
                 return 'timed-out'
             }
         }
