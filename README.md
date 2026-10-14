@@ -1,4 +1,4 @@
-# ![DOM Proxy](./public/img/dom-proxy-64.png) DOM Proxy
+# <img src="./public/img/dom-proxy.svg" alt="" width="48" height="48" align="top"> DOM Proxy
 
 [![CI](https://github.com/mmis1000/DOM-Proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/mmis1000/DOM-Proxy/actions/workflows/ci.yml)
 
@@ -165,6 +165,7 @@ All calls share one lock, so a thread that dies or hangs in the middle of a call
 | `await-async.js` | `Atomics.waitAsync` polyfill |
 | `index.html`, `worker.js`, `worker2.js` | The demo |
 | `serve.js` | Static server with the cross-origin isolation headers (`npm run demo`) |
+| `public/img/dom-proxy.svg` | The logo; the PNGs next to it are exported from it |
 
 ```sh
 npm test               # rpc and proxy layers with real Node.js worker threads (Node 22+)
