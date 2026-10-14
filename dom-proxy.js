@@ -13,9 +13,10 @@ globalThis.DomProxy = {
     * create the dom proxy
     * @param {Int32Array} ia32 
     * @param {()=>any} getRoot 
+    * @param {ListenOptions} [options] passed to the rpc layer (timeout, heartbeat)
     */   
-    create: function create(ia32, getRoot) {
-        const rpc = listen(listener, ia32)
+    create: function create(ia32, getRoot, options) {
+        const rpc = listen(listener, ia32, options)
     
         const currentThread = rpc.current
         const rpcSend = /** @type {RpcSend} */(rpc.send)
@@ -132,7 +133,8 @@ globalThis.DomProxy = {
         function flushCollected() {
             const ids = collectedIds.splice(0)
 
-            batchUnref(() => {
+            try {
+                batchUnref(() => {
                 for (let id of ids) {
                     // the id may have been fetched again (and got a new proxy) after the old one was collected
                     const ref = remoteIdToObject.get(id)
@@ -143,7 +145,11 @@ globalThis.DomProxy = {
                     // every proxy took one ref when created, so every collected proxy gives one back
                     unrefRemote(id)
                 }
-            })
+                })
+            } catch (err) {
+                // the owner may be gone (dead thread), nothing left to release then
+                console.error(err)
+            }
         }
 
         /**
@@ -194,8 +200,12 @@ globalThis.DomProxy = {
                 cb()
             } else {
                 bufferingRefs = true
-                cb()
-                bufferingRefs = false
+                try {
+                    cb()
+                } finally {
+                    // a throwing callback must not leave every later call buffered
+                    bufferingRefs = false
+                }
                 
                 // handle batching here
                 const ids = bufferedRefs.slice(0)
@@ -258,8 +268,12 @@ globalThis.DomProxy = {
                 cb()
             } else {
                 bufferingUnrefs = true
-                cb()
-                bufferingUnrefs = false
+                try {
+                    cb()
+                } finally {
+                    // a throwing callback must not leave every later call buffered
+                    bufferingUnrefs = false
+                }
                 
                 // handle batching here
                 const ids = bufferedUnrefs.slice(0)
@@ -290,9 +304,78 @@ globalThis.DomProxy = {
         }
 
         /**
-         * @type { PropertyDescriptorMap | null }
+         * descriptors fetched together with the keys by the last ownKeys,
+         * so Object.keys and friends don't need a request per property
+         * @type { { id: number, map: Map<string | symbol, PropertyDescriptor> } | null }
          */
         let preloadedDescriptors = null
+
+        /**
+         * well-known symbols are the same in every thread, so they can be sent by name
+         * @type {Map<symbol, string>}
+         */
+        const wellKnownSymbols = new Map(
+            Object.getOwnPropertyNames(Symbol)
+                .filter(name => typeof (/** @type {any} */ (Symbol))[name] === 'symbol')
+                .map(name => [(/** @type {any} */ (Symbol))[name], name])
+        )
+
+        /**
+         * @param {symbol} symbol
+         * @returns {ValueSymbol | null} null for a unique symbol, those can't be mapped between threads yet
+         */
+        function encodeSymbol(symbol) {
+            const name = wellKnownSymbols.get(symbol)
+            if (name !== undefined) {
+                return { type: 'symbol', wellKnown: name }
+            }
+
+            const key = Symbol.keyFor(symbol)
+            if (key !== undefined) {
+                return { type: 'symbol', key }
+            }
+
+            return null
+        }
+
+        /**
+         * @param {ValueSymbol} value
+         * @returns {symbol}
+         */
+        function decodeSymbol(value) {
+            if (value.wellKnown !== undefined) {
+                const symbol = (/** @type {any} */ (Symbol))[value.wellKnown]
+                if (typeof symbol !== 'symbol') {
+                    throw new TypeError('Symbol.' + value.wellKnown + ' is not supported in this thread')
+                }
+                return symbol
+            }
+
+            return Symbol.for(/** @type {string} */ (value.key))
+        }
+
+        /**
+         * @param {string | symbol} key
+         * @returns {Key | null} null for a unique symbol
+         */
+        function encodeKey(key) {
+            return typeof key === 'string' ? key : encodeSymbol(key)
+        }
+
+        /**
+         * @param {Key} key
+         * @returns {string | symbol}
+         */
+        function decodeKey(key) {
+            return typeof key === 'string' ? key : decodeSymbol(key)
+        }
+
+        /**
+         * @param {string | symbol} key
+         */
+        function uniqueSymbolError(key) {
+            return new TypeError('can\'t use a unique symbol on an object of another thread: ' + String(key))
+        }
 
         /**
          * get object from object id
@@ -309,76 +392,116 @@ globalThis.DomProxy = {
                         throw new Error('unknown id')
                     }
     
-                    const proto = type === 'function' ? function PlaceHolder () {} : {}
+                    // a bound function has no own `prototype`, which would be non-configurable
+                    // and make ownKeys fail for remote functions that don't have one either
+                    const proto = type === 'function' ? function PlaceHolder () {}.bind(null) : {}
+                    const owner = getOwnerAndId(id)[0]
     
                     refRemote(id)
     
                     const proxy = new Proxy(proto, {
                         get(target, p, receiver) {
                             preloadedDescriptors = null
-                            if (typeof p === 'symbol') {
-                                throw new Error('not support')
-                            }
-    
-                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertyGet} */({
+                            const key = encodeKey(p)
+                            // the remote object can't have a key that never left this thread
+                            if (key === null) return undefined
+
+                            return convertToRaw(rpcSendMayThrow(owner, /** @type {CommandPropertyGet} */({
                                 type: 'get',
                                 id: id,
-                                property: p
+                                property: key
                             })).value)
                         },
                         set(target, p, value, receiver) {
                             preloadedDescriptors = null
-                            if (typeof p === 'symbol') {
-                                throw new Error('not support')
-                            }
-    
-                            return rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertySet} */({
+                            const key = encodeKey(p)
+                            if (key === null) throw uniqueSymbolError(p)
+
+                            return rpcSendMayThrow(owner, /** @type {CommandPropertySet} */({
                                 type: 'set',
                                 id: id,
-                                property: p,
+                                property: key,
                                 value: convertToWrapped(value)
                             })).success
                         },
+                        has(target, p) {
+                            preloadedDescriptors = null
+                            const key = encodeKey(p)
+                            if (key === null) return false
+
+                            return rpcSendMayThrow(owner, /** @type {CommandHas} */({
+                                type: 'has',
+                                id,
+                                property: key
+                            })).result
+                        },
+                        deleteProperty(target, p) {
+                            preloadedDescriptors = null
+                            const key = encodeKey(p)
+                            if (key === null) return true
+
+                            return rpcSendMayThrow(owner, /** @type {CommandDelete} */({
+                                type: 'delete',
+                                id,
+                                property: key
+                            })).result
+                        },
+                        defineProperty(target, p, descriptor) {
+                            preloadedDescriptors = null
+                            const key = encodeKey(p)
+                            if (key === null) throw uniqueSymbolError(p)
+
+                            return rpcSendMayThrow(owner, /** @type {CommandDefineProperty} */({
+                                type: 'defineProperty',
+                                id,
+                                property: key,
+                                descriptor: mapDescriptor(descriptor)
+                            })).result
+                        },
                         ownKeys(target) {
                             preloadedDescriptors = null
-                            var res = rpcSendMayThrow(getOwnerAndId(id)[0], {
+                            var res = rpcSendMayThrow(owner, /** @type {CommandProperties} */({
                                 type: 'getProperties',
                                 id
-                            })
+                            }))
+
+                            const keys = res.properties.map(decodeKey)
 
                             batchRef(() => {
                                 /**
-                                 * @type { PropertyDescriptorMap }
+                                 * @type { Map<string | symbol, PropertyDescriptor> }
                                  */
-                                const map = {}
+                                const map = new Map()
 
-                                for (let key of Object.keys(res.preloadDescriptor)) {
-                                    map[key] = unmapDescriptor(res.preloadDescriptor[key])
-                                }
+                                keys.forEach((key, index) => {
+                                    map.set(key, unmapDescriptor(res.preloadDescriptor[index]))
+                                })
 
-                                preloadedDescriptors = map
+                                preloadedDescriptors = { id, map }
                             })
 
-                            return res.properties
+                            return keys
                         },
                         getOwnPropertyDescriptor(target, p) {
-                            if (typeof p !== 'string') throw new Error()
-
-                            if (preloadedDescriptors && preloadedDescriptors[p]) {
-                                return preloadedDescriptors[p]
+                            if (preloadedDescriptors && preloadedDescriptors.id === id && preloadedDescriptors.map.has(p)) {
+                                return preloadedDescriptors.map.get(p)
                             }
 
-                            const res = rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandPropertyGetDescriptor} */({
+                            preloadedDescriptors = null
+                            const key = encodeKey(p)
+                            if (key === null) return undefined
+
+                            const res = rpcSendMayThrow(owner, /** @type {CommandPropertyGetDescriptor} */({
                                 type: "getDescriptor",
                                 id,
-                                property: p
+                                property: key
                             })).descriptor
 
-                            return unmapDescriptor(res)
+                            return res === null ? undefined : unmapDescriptor(res)
                         },
                         construct(target, argArray, newTarget) {
                             preloadedDescriptors = null
-                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandConstruct} */({
+                            return convertToRaw(rpcSendMayThrow(owner, /** @type {CommandConstruct} */({
                                 type: "construct",
                                 self: convertToWrapped(newTarget),
                                 args: argArray.map(convertToWrapped),
@@ -390,7 +513,7 @@ globalThis.DomProxy = {
                         },
                         apply(target, thisArg, argArray) {
                             preloadedDescriptors = null
-                            return convertToRaw(rpcSendMayThrow(getOwnerAndId(id)[0], /** @type {CommandCall} */({
+                            return convertToRaw(rpcSendMayThrow(owner, /** @type {CommandCall} */({
                                 type: "call",
                                 self: convertToWrapped(thisArg),
                                 args: argArray.map(convertToWrapped),
@@ -457,11 +580,33 @@ globalThis.DomProxy = {
             switch (typeof arg) {
                 case "boolean":
                 case "string":
-                case "number":
                     return {
                         type: "primitive",
                         value: arg
                     }
+                case "number":
+                    // JSON turns NaN and Infinity into null and drops the sign of -0
+                    if (Number.isFinite(arg) && !Object.is(arg, -0)) {
+                        return {
+                            type: "primitive",
+                            value: arg
+                        }
+                    }
+                    return {
+                        type: "number",
+                        value: Object.is(arg, -0) ? '-0' : String(arg)
+                    }
+                case "bigint":
+                    return {
+                        type: "bigint",
+                        value: arg.toString()
+                    }
+                case "symbol":
+                    const symbol = encodeSymbol(arg)
+                    if (symbol === null) {
+                        throw new TypeError('can\'t pass a unique symbol to another thread: ' + String(arg))
+                    }
+                    return symbol
                 case "object":
                     return {
                         type: "object",
@@ -485,6 +630,12 @@ globalThis.DomProxy = {
             switch (arg.type) {
                 case "primitive":
                     return arg.value
+                case "number":
+                    return arg.value === '-0' ? -0 : Number(arg.value)
+                case "bigint":
+                    return BigInt(arg.value)
+                case "symbol":
+                    return decodeSymbol(arg)
                 case "object":
                     return getObjectFromId(arg.ref, "object")
                 case "function":
@@ -499,7 +650,7 @@ globalThis.DomProxy = {
          * @returns {mappedDescriptor}
          */
         function mapDescriptor(des) {
-            if (des.get != null) {
+            if ('get' in des || 'set' in des) {
                 return  {
                     descriptorType: 'accessor',
                     enumerable: des.enumerable,
@@ -520,15 +671,16 @@ globalThis.DomProxy = {
         /**
          * 
          * @param {mappedDescriptor} res 
+         * @param {boolean} [exact] keep `configurable`, for defining on a real object
          * @returns {PropertyDescriptor}
          */
-        function unmapDescriptor(res) {
+        function unmapDescriptor(res, exact = false) {
             if (res.descriptorType === 'accessor') {
                 return {
                     enumerable: res.enumerable,
                     // configurable: res.configurable,
                     // because configurable false with unmatched value with placeholder will throw
-                    configurable: true,
+                    configurable: exact ? res.configurable : true,
                     set: convertToRaw(res.set),
                     get: convertToRaw(res.get)
                 }
@@ -537,7 +689,7 @@ globalThis.DomProxy = {
                     enumerable: res.enumerable,
                     // configurable: res.configurable,
                     // because configurable false with unmatched value with placeholder will throw
-                    configurable: true,
+                    configurable: exact ? res.configurable : true,
                     writable: res.writable,
                     value: convertToRaw(res.value)
                 }
@@ -559,13 +711,27 @@ globalThis.DomProxy = {
                         }
                     case "get":
                         return {
-                            value: convertToWrapped(getObjectFromId(message.id)[message.property])
+                            value: convertToWrapped(getObjectFromId(message.id)[decodeKey(message.property)])
                         }
                     case "set":
-                        getObjectFromId(message.id)[message.property] = convertToRaw(message.value)
-    
                         return {
-                            success: true
+                            success: Reflect.set(getObjectFromId(message.id), decodeKey(message.property), convertToRaw(message.value))
+                        }
+                    case "has":
+                        return {
+                            result: decodeKey(message.property) in getObjectFromId(message.id)
+                        }
+                    case "delete":
+                        return {
+                            result: Reflect.deleteProperty(getObjectFromId(message.id), decodeKey(message.property))
+                        }
+                    case "defineProperty":
+                        return {
+                            result: Reflect.defineProperty(
+                                getObjectFromId(message.id),
+                                decodeKey(message.property),
+                                unmapDescriptor(message.descriptor, true)
+                            )
                         }
                     case "ref":
                         var object = getObjectFromId(message.id)
@@ -608,39 +774,21 @@ globalThis.DomProxy = {
                         return {}
                     case "getDescriptor":
                         var object = getObjectFromId(message.id)
-                        var des = Object.getOwnPropertyDescriptor(object, message.property)
-                        if (!des) throw "unknown property " + message.property
-                        if (des.get != null) {
-                            return {
-                                descriptor: {
-                                    descriptorType: 'accessor',
-                                    enumerable: des.enumerable,
-                                    configurable: des.configurable,
-                                    get: convertToWrapped(des.get),
-                                    set: convertToWrapped(des.set)
-                                }
-                            }
-                        } else {
-                            return {
-                                descriptor: {
-                                    descriptorType: 'value',
-                                    enumerable: des.enumerable,
-                                    configurable: des.configurable,
-                                    writable: des.writable,
-                                    value: convertToWrapped(des.value)
-                                }
-                            }
+                        var des = Object.getOwnPropertyDescriptor(object, decodeKey(message.property))
+                        return {
+                            descriptor: des ? mapDescriptor(des) : null
                         }
                     case "getProperties":
                         var object = getObjectFromId(message.id)
-                        var keys = /** @type {string[]} */(Reflect.ownKeys(object).filter(i => typeof i === 'string'))
-                        var descriptors = Object.getOwnPropertyDescriptors(object)
+                        var keys = Reflect.ownKeys(object)
+                            .map(key => /** @type {[string | symbol, Key | null]} */ ([key, encodeKey(key)]))
+                            // unique symbols can't be mapped, leave them out
+                            .filter(pair => pair[1] !== null)
                         return {
-                            properties: keys,
-                            preloadDescriptor: keys.map(i => /** @type {[String, mappedDescriptor]} */([i, mapDescriptor(descriptors[i])])).reduce((prev, curr) => {
-                                prev[curr[0]] = curr[1]
-                                return prev
-                            }, /** @type {{[key: string]: mappedDescriptor}} */({}))
+                            properties: keys.map(pair => /** @type {Key} */ (pair[1])),
+                            preloadDescriptor: keys.map(pair => mapDescriptor(
+                                /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(object, pair[0]))
+                            ))
                         }
                     case "construct":
                         var fn = convertToRaw(message.fn)
@@ -666,7 +814,7 @@ globalThis.DomProxy = {
             }
     
             return {
-                error: "not implemented method " + /** @type { any } */(message).type
+                error: convertToWrapped(new Error("not implemented method " + /** @type { any } */(message).type))
             }
         }
     

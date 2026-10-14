@@ -11,6 +11,7 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), but more transparen
       1. [Operate on mainland sync](#Operate-on-mainland-sync)
       2. [Strict equal of proxied same object](#Strict-equal-of-proxied-same-object)
       3. [The garbage collection](#The-garbage-collection)
+      4. [Dead and stuck threads](#Dead-and-stuck-threads)
    2. [Caveats](#Caveats)
 5. [Tests](#Tests)
 6. [Todos](#TODOS)
@@ -28,11 +29,16 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), but more transparen
 3. [Atomics.waitAsync](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync); `await-async.js` installs a polyfill only where the browser has none
 
 ## API
-- DomProxy.create(`ia32`, `getRoot`) => `[[Payload Object]]`
+- DomProxy.create(`ia32`, `getRoot`, `options?`) => `[[Payload Object]]`
   - Call this on every thread that wants to use the proxy, with the same Int32Array backed by a SharedArrayBuffer
   - arguments
-    - ia32: Int32Array backed by a SharedArrayBuffer. Messages are passed through it, so it must be large enough for the largest message (sending a larger one throws)
+    - ia32: Int32Array backed by a SharedArrayBuffer. Messages are passed through it, so it must be large enough for the largest message (sending a larger one throws). About 3KB of it is used for bookkeeping
     - getRoot : function that returns the object that represents this thread
+    - options (optional, per thread)
+      - timeout: ms a call made from this thread may take, including the wait for other calls to finish. Default `Infinity`, like any JavaScript call
+      - deadAfter: ms without a heartbeat before another thread counts as dead. Default `2000`
+      - heartbeatInterval: ms between heartbeats. Default `100`
+      - startHeartbeat: `false` to turn the heartbeat off, or a function `(ia32, index, interval)` that keeps incrementing `ia32[index]` for as long as this thread lives. The default starts a nested worker
   - **call it only once per thread**
 
 - [[Payload Object]] 
@@ -44,6 +50,10 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), but more transparen
 
 - No other api required, no async await things, no value wrapper, nothing else
 - An error thrown on the other thread is rethrown in the calling thread
+- A call can also fail with an error whose `name` is
+  - `RpcTimeoutError`: the call took longer than `timeout`
+  - `RpcThreadDeadError`: the thread it went to is dead (its `thread` property holds the id)
+  - `RpcAbortedError`: the caller further up already gave up on the call this thread is running, so the rest of it can't send anything anymore
 
 ## Example
 Host
@@ -197,19 +207,32 @@ findIdInMapAndDropIt(map, id)
 // worker
 ```
 
+#### Dead and stuck threads
+All calls share one lock, so a thread that dies or hangs in the middle of a call would otherwise freeze every thread.
+
+- Every thread starts a tiny nested worker that keeps incrementing a counter in the shared memory, even while its thread is busy or blocked. The browser stops it together with its thread, so a counter that stops moving for `deadAfter` means the thread is dead.
+- A call to a dead thread fails with `RpcThreadDeadError`, and a call that exceeds `timeout` fails with `RpcTimeoutError`. Either way the caller takes the lock back, and all other threads carry on.
+- The thread that was given up on may still be running. Everything it tries to write afterwards (its response, its own calls) is rejected: every write is a compare-and-swap from the exact lock value at which the thread got its turn, and that value includes a counter which changes whenever a call is abandoned. So a late response can never land in someone else's call.
+- If the thread holding the lock dies with nobody waiting on it, the next thread that wants the lock resets it.
+
 ### Caveats
 1. Every property access, call or assignment on a proxy is a blocking round trip to another thread, and only one call chain runs across all threads at a time.
    Avoid chatty access in hot loops. `Object.keys` and similar fetch every property descriptor of the object in one request.
 2. In browsers without native `Atomics.waitAsync` the polyfill is used, which waits in a helper worker and is far more expensive.
 3. Garbage collection relies on `WeakRef` and `FinalizationRegistry`, which can't be polyfilled. Two objects that only reference each other across threads are never collected.
-4. Values are serialized as JSON, so only strings, numbers, booleans, `null`, `undefined`, objects and functions can be passed (objects and functions are passed as proxies).
+4. Primitives (including `NaN`, `-0`, `Infinity` and `BigInt`) are copied exactly, objects and functions are passed as proxies.
+   Well-known symbols (`Symbol.iterator`, `Symbol.toPrimitive`...) and registered ones (`Symbol.for`) work as values and keys, so `for...of`, spreading, template literals and `instanceof` work on proxies.
+   A unique symbol (`Symbol()`) can't be passed yet: passing one throws, and reading such a key from a proxy gives `undefined`.
+5. A proxy is not an array to `Array.isArray`, and every property it reports is configurable (a non-configurable one would conflict with the proxy's placeholder target).
+6. A thread that dies before its heartbeat started (within milliseconds of starting, or while it is busy right after starting) counts as alive. Chromium takes a few seconds to actually stop a busy worker after `terminate()`, so its death is noticed only then.
+   Objects the dead thread had received stay referenced on the threads that own them.
 
 ## Tests
 - `npm test` runs the rpc and proxy layers with real Node.js worker threads (Node 22+); the main thread plays the page, with `Atomics.wait` disabled as in a browser window.
-- `npm run test:browser` runs the demo page in Chromium through Playwright, with native `Atomics.waitAsync` and with the `await-async.js` polyfill.
+- `npm run test:browser` runs the demo page in Chromium through Playwright, with native `Atomics.waitAsync` and with the `await-async.js` polyfill, and checks that a worker terminated in the middle of a call is noticed.
   Run `npm install` and `npx playwright install chromium` first.
 
 ## TODOS
-1. Mapping symbol between workers (currently throws)
+1. Mapping unique symbols between workers (currently throws)
 2. Fix thread count limit (currently 255)
 3. Fix object id limit (currently 8388608, aka `2**23`)

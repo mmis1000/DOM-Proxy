@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>dead thread test</title>
+</head>
+<body>
+    <!-- loaded by demo.test.js: a worker dies in the middle of a call -->
+    <script src="../../await-async.js"></script>
+    <script src="../../rpc.js"></script>
+    <script src="../../dom-proxy.js"></script>
+    <script>
+        const ia32 = new Int32Array(new SharedArrayBuffer(1024 * 1024))
+        const proxy = DomProxy.create(ia32, () => window, { deadAfter: 500 })
+
+        function spawn() {
+            return new Promise(resolve => {
+                const worker = new Worker('death-worker.js')
+                worker.onmessage = event => {
+                    resolve({
+                        worker,
+                        id: event.data.ready,
+                        reply: () => new Promise(r => { worker.onmessage = e => r(e.data) })
+                    })
+                }
+                worker.postMessage({ init: true, ia32 })
+            })
+        }
+
+        async function run() {
+            const a = await spawn()
+            const b = await spawn()
+
+            // the page blocks while b is busy for three times the dead threshold
+            const busy = proxy.getRemote(b.id).busy(1500)
+
+            // a calls b, and b gets terminated in the middle of the call
+            const reply = a.reply()
+            a.worker.postMessage({ call: { target: b.id, ms: 20000 } })
+            await new Promise(r => setTimeout(r, 300))
+            b.worker.terminate()
+            const dead = await reply
+
+            const echo = proxy.getRemote(a.id).echo(1)
+
+            return { busy, dead, echo }
+        }
+
+        window.result = run().catch(err => ({ error: String(err && err.stack || err) }))
+    </script>
+</body>
+</html>

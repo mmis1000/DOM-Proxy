@@ -34,6 +34,23 @@ Atomics.waitAsync = function (...args) {
 vm.runInThisContext(fs.readFileSync(path.join(__dirname, '..', 'rpc.js'), 'utf8'), { filename: 'rpc.js' })
 const listen = /** @type {any} */ (globalThis).listen
 
+// Node has no web Worker, so start the heartbeat in a nested worker_threads worker,
+// which like a nested web worker dies together with the thread that started it.
+const heartbeatCode = `
+    const { workerData: [ia32, index, interval] } = require('worker_threads')
+    while (true) {
+        Atomics.add(ia32, index, 1)
+        Atomics.wait(ia32, index, Atomics.load(ia32, index), interval)
+    }
+`
+const listenOptions = {
+    deadAfter: 400,
+    heartbeatInterval: 25,
+    startHeartbeat(/** @type {Int32Array} */ ia32, /** @type {number} */ index, /** @type {number} */ interval) {
+        new Worker(heartbeatCode, { eval: true, workerData: [ia32, index, interval] }).unref()
+    },
+}
+
 /**
  * @param {number} ms
  */
@@ -56,6 +73,8 @@ function makeHandler(getRpc) {
             case 'busy': busy(msg.arg); return 'done'
             case 'from': return from
             case 'big': return 'x'.repeat(msg.arg)
+            // die in the middle of handling a call
+            case 'exit': process.exit(0)
         }
         throw new Error('unknown op ' + msg.op)
     }
@@ -65,17 +84,19 @@ function makeHandler(getRpc) {
  * @param {() => any} fn
  */
 function capture(fn) {
+    const start = performance.now()
     try {
         return { value: fn() }
     } catch (err) {
-        return { error: String(err && /** @type {any} */ (err).message || err) }
+        const e = /** @type {any} */ (err)
+        return { error: String(e && e.message || e), name: e && e.name, elapsed: performance.now() - start }
     }
 }
 
 if (!isMainThread) {
     /** @type {any} */
     let rpc
-    rpc = listen(makeHandler(() => rpc), workerData.ia32)
+    rpc = listen(makeHandler(() => rpc), workerData.ia32, { ...listenOptions, timeout: workerData.timeout })
     /** @type {any} */
     let ticker
     let ticks = 0
@@ -99,21 +120,30 @@ if (!isMainThread) {
                 break
         }
     })
-    parentPort?.postMessage({ ready: rpc.current })
+    // heartbeat slot of this thread, see the memory layout in rpc.js
+    const heartbeat = 8 + rpc.current
+    const waitForHeartbeat = () => Atomics.load(workerData.ia32, heartbeat) !== 0
+        ? parentPort?.postMessage({ ready: rpc.current })
+        : setTimeout(waitForHeartbeat, 5)
+    waitForHeartbeat()
 } else {
     Atomics.wait = () => { throw new TypeError('Atomics.wait cannot be called in this context') }
 
     const ia32 = new Int32Array(new SharedArrayBuffer(64 * 1024))
     /** @type {any} */
     let rpc
-    rpc = listen(makeHandler(() => rpc), ia32)
+    rpc = listen(makeHandler(() => rpc), ia32, listenOptions)
 
     /** @type {Worker[]} */
     const workers = []
 
-    function spawn() {
+    /**
+     * @param {{ timeout?: number }} [options]
+     * @returns {Promise<any>}
+     */
+    function spawn({ timeout = Infinity } = {}) {
         return new Promise((resolve, reject) => {
-            const worker = new Worker(__filename, { workerData: { ia32 } })
+            const worker = new Worker(__filename, { workerData: { ia32, timeout } })
             workers.push(worker)
             worker.once('error', reject)
             worker.once('message', (m) => {
@@ -121,6 +151,7 @@ if (!isMainThread) {
                 worker.on('message', (reply) => pending.shift()?.(reply))
                 resolve({
                     id: m.ready,
+                    worker,
                     /** @param {any} cmd */
                     run(cmd) {
                         return new Promise((res) => {
@@ -237,6 +268,91 @@ if (!isMainThread) {
             }
             await Promise.all(jobs)
         },
+
+        async 'callee dies mid-call'() {
+            const a = await spawn()
+            const b = await spawn()
+            const res = capture(() => rpc.send(b.id, { op: 'exit' }))
+            expectError(res, 'RpcThreadDeadError')
+            eq(await a.run({ type: 'send', target: rpc.current, msg: { op: 'echo', arg: 1 } }), { value: 1 }, 'worker -> page afterwards')
+            eq(capture(() => rpc.send(a.id, { op: 'echo', arg: 2 })), { value: 2 }, 'page -> worker afterwards')
+            const again = capture(() => rpc.send(b.id, { op: 'echo', arg: 3 }))
+            expectError(again, 'RpcThreadDeadError', 50)
+        },
+
+        async 'nested callee dies'() {
+            const a = await spawn()
+            const b = await spawn()
+            const res = await a.run({ type: 'send', target: rpc.current, msg: { op: 'call', target: b.id, msg: { op: 'exit' } } })
+            expectError(res, 'RpcThreadDeadError')
+            eq(await a.run({ type: 'send', target: rpc.current, msg: { op: 'echo', arg: 1 } }), { value: 1 }, 'afterwards')
+        },
+
+        async 'caller dies while holding the lock'() {
+            const a = await spawn()
+            const b = await spawn()
+            const c = await spawn()
+            // a holds the lock while b works, then dies before b responds
+            a.run({ type: 'send', target: b.id, msg: { op: 'busy', arg: 600 } })
+            await sleep(150)
+            await a.worker.terminate()
+            const res = await c.run({ type: 'send', target: rpc.current, msg: { op: 'echo', arg: 1 } })
+            eq(res, { value: 1 }, 'lock recovered')
+        },
+
+        async 'busy thread is not mistaken for dead'() {
+            const a = await spawn()
+            const b = await spawn()
+            // three times the dead threshold
+            eq(await a.run({ type: 'send', target: b.id, msg: { op: 'busy', arg: 1200 } }), { value: 'done' }, 'long call')
+        },
+
+        async 'timeout on a stuck callee'() {
+            const a = await spawn({ timeout: 300 })
+            const b = await spawn()
+            const c = await spawn()
+            const res = await a.run({ type: 'send', target: b.id, msg: { op: 'busy', arg: 1500 } })
+            expectError(res, 'RpcTimeoutError', 800)
+            // the lock is free again while b is still busy
+            eq(await c.run({ type: 'send', target: rpc.current, msg: { op: 'echo', arg: 1 } }), { value: 1 }, 'lock released')
+            // b's late response was dropped, it does not answer the next call
+            await sleep(1500)
+            eq(await a.run({ type: 'send', target: b.id, msg: { op: 'echo', arg: 'fresh' } }), { value: 'fresh' }, 'b afterwards')
+        },
+
+        async 'timeout aborts the calls below it'() {
+            const a = await spawn({ timeout: 300 })
+            const b = await spawn()
+            const c = await spawn()
+            // a -> page -> b, b is too slow for a
+            const res = await a.run({ type: 'send', target: rpc.current, msg: { op: 'call', target: b.id, msg: { op: 'busy', arg: 1000 } } })
+            expectError(res, 'RpcTimeoutError', 800)
+            eq(await c.run({ type: 'send', target: rpc.current, msg: { op: 'echo', arg: 1 } }), { value: 1 }, 'page afterwards')
+            await sleep(1000)
+            eq(capture(() => rpc.send(b.id, { op: 'echo', arg: 2 })), { value: 2 }, 'b afterwards')
+            eq(await a.run({ type: 'send', target: rpc.current, msg: { op: 'echo', arg: 3 } }), { value: 3 }, 'a afterwards')
+        },
+
+        async 'waiting for the lock times out'() {
+            const a = await spawn({ timeout: 300 })
+            const b = await spawn()
+            const c = await spawn()
+            const slow = c.run({ type: 'send', target: b.id, msg: { op: 'busy', arg: 1000 } })
+            await sleep(100)
+            const res = await a.run({ type: 'send', target: rpc.current, msg: { op: 'echo', arg: 1 } })
+            expectError(res, 'RpcTimeoutError', 800)
+            eq(await slow, { value: 'done' }, 'the lock holder is unaffected')
+        },
+    }
+
+    /**
+     * @param {any} res
+     * @param {string} name
+     * @param {number} [within] ms
+     */
+    function expectError(res, name, within = Infinity) {
+        if (res.name !== name) throw new Error('expected ' + name + ', got ' + JSON.stringify(res))
+        if (res.elapsed !== undefined && res.elapsed > within) throw new Error(`${name} took ${res.elapsed}ms, expected at most ${within}ms`)
     }
 
     const name = process.argv[2]

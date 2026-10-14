@@ -9,7 +9,7 @@ const { createServer } = require('../../serve.js')
 
 /**
  * Load the demo, run it and collect what happened.
- * @param {Parameters<typeof createServer>[0]} options
+ * @param {Parameters<typeof createServer>[0] & { path?: string }} options
  * @param {(page: import('playwright').Page) => Promise<void>} [interact]
  */
 async function runDemo(options, interact) {
@@ -39,12 +39,12 @@ async function runDemo(options, interact) {
         page.on('worker', worker => result.workers.push(worker.url()))
 
         const address = /** @type {import('net').AddressInfo} */ (server.address())
-        await page.goto(`http://localhost:${address.port}/`)
+        await page.goto(`http://localhost:${address.port}/${options && options.path || ''}`)
         result.isolated = await page.evaluate(() => crossOriginIsolated)
 
         if (interact) await interact(page)
 
-        return result
+        return { ...result, page: options && options.path ? await page.evaluate(() => /** @type {any} */ (window).result) : undefined }
     } finally {
         await browser.close()
         server.close()
@@ -81,4 +81,18 @@ test('demo needs the cross-origin isolation headers', async () => {
 
     assert.strictEqual(result.isolated, false)
     assert.ok(result.errors.some(err => /SharedArrayBuffer is not defined/.test(err)), result.errors.join('\n'))
+})
+
+test('a worker that dies in the middle of a call fails the call instead of hanging', async () => {
+    const result = await runDemo({ path: 'test/browser/death.html' })
+
+    assert.deepStrictEqual(result.errors, [])
+    const { busy, dead, echo, error } = result.page
+    assert.strictEqual(error, undefined)
+    // busy for three times the dead threshold, but its heartbeat kept going
+    assert.strictEqual(busy, 'done')
+    assert.strictEqual(dead.name, 'RpcThreadDeadError', JSON.stringify(dead))
+    // b would have been busy for 20s, Chromium takes a second or two to stop a busy worker
+    assert.ok(dead.elapsed < 8000, 'noticed after ' + dead.elapsed + 'ms')
+    assert.strictEqual(echo, 1)
 })
