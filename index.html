@@ -3,61 +3,171 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>DOM Proxy demo</title>
     <link rel="shortcut icon" type="image/png" href="./public/img/dom-proxy-64.png"/>
     <meta property="og:title" content="DOM Proxy demo" />
     <meta property="og:image" content="./public/img/dom-proxy-64.png" />
-</head>
-<body>
-    <script>
-        window.hostData = {
-            test: {
-                test2: 3
+    <style>
+        :root {
+            --bg: #f6f7f9;
+            --card: #ffffff;
+            --text: #1d2330;
+            --muted: #667085;
+            --border: #dde1e8;
+            --accent: #3a6ff7;
+            --error: #c4321f;
+            color-scheme: light;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #12151b;
+                --card: #1b2029;
+                --text: #e6e9ef;
+                --muted: #98a2b3;
+                --border: #2c3340;
+                --accent: #7b9cff;
+                --error: #ff8a7a;
+                color-scheme: dark;
             }
         }
-    </script>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 24px 16px 48px;
+            background: var(--bg);
+            color: var(--text);
+            font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+        header, main { max-width: 980px; margin: 0 auto; }
+        header { display: flex; gap: 16px; align-items: center; margin-bottom: 20px; }
+        header img { width: 56px; height: 56px; }
+        h1 { margin: 0; font-size: 26px; }
+        h2 { margin: 0 0 12px; font-size: 16px; }
+        p { margin: 0 0 8px; }
+        code { font-size: 13px; }
+        a { color: var(--accent); }
+        .muted { color: var(--muted); }
+        .error { color: var(--error); }
+        main { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+        @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-width: 0; }
+        .card + .card { margin-top: 16px; }
+        #app section { padding: 12px 0; border-top: 1px solid var(--border); }
+        #app section:first-of-type { border-top: 0; padding-top: 0; }
+        #app h3 { margin: 0 0 8px; font-size: 14px; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        input, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+        button { cursor: pointer; }
+        button:hover { border-color: var(--accent); }
+        button:disabled { opacity: .5; cursor: default; }
+        output { font-variant-numeric: tabular-nums; font-weight: 600; }
+        ul, ol { margin: 0; padding-left: 20px; }
+        dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+        dt { color: var(--muted); }
+        dd { margin: 0; overflow-wrap: anywhere; }
+        @media (max-width: 560px) {
+            dl { grid-template-columns: 1fr; gap: 0; }
+            dd { margin-bottom: 6px; }
+        }
+        #threads { margin-bottom: 8px; }
+        #log { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 320px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <header>
+        <img src="./public/img/dom-proxy-64.png" alt="">
+        <div>
+            <h1>DOM Proxy demo</h1>
+            <p class="muted">Everything in the left panel is built and driven by a web worker, through plain synchronous DOM calls.</p>
+        </div>
+    </header>
+
+    <main>
+        <div>
+            <section class="card">
+                <h2>Built by worker A</h2>
+                <div id="app"><p class="muted" id="status">Starting the workers…</p></div>
+            </section>
+        </div>
+        <div>
+            <section class="card">
+                <h2>Threads</h2>
+                <ul id="threads"></ul>
+                <p class="muted">Worker A counts primes by calling worker B directly, through a function the page handed over.
+                    Terminate B and count again: the call fails with <code>RpcThreadDeadError</code> instead of hanging every thread.</p>
+                <button id="stop-b" disabled>Terminate worker B</button>
+            </section>
+            <section class="card">
+                <h2>Log</h2>
+                <ol id="log"></ol>
+            </section>
+        </div>
+    </main>
+
     <script src="await-async.js"></script>
     <script src="rpc.js"></script>
     <script src="dom-proxy.js"></script>
     <script>
-        var sab = new SharedArrayBuffer(1024 * 1024 * 8)
-        var ia32 = new Int32Array(sab)
-        var proxy = DomProxy.create(ia32, () => window)
+        /** shown in the log panel, the workers call it too */
+        window.demoLog = function (text) {
+            const item = document.createElement('li')
+            item.textContent = text
+            const log = document.getElementById('log')
+            log.append(item)
+            log.scrollTop = log.scrollHeight
+        }
 
-        function spawn(script = './worker.js') {
+        window.demoData = { items: ['alpha', 'beta', 'gamma'], createdAt: new Date() }
+
+        function fail(html) {
+            const status = document.getElementById('status')
+            status.className = 'error'
+            status.innerHTML = html
+        }
+
+        function spawn(script, name) {
             return new Promise((resolve, reject) => {
                 const worker = new Worker(script)
-                worker.postMessage({
-                    command: 'init',
-                    ia32,
-                    host: proxy.current
-                })
-                worker.addEventListener('message', function (event) {
-                    var data = event.data
-                    if (data.command === 'ready') {
-                        console.log('ready')
-                        resolve({
-                            root: proxy.getRemote(data.current)
-                        })
-                    }
-                })
+                worker.onerror = event => reject(new Error(name + ': ' + event.message))
+                worker.onmessage = event => resolve({ worker, id: event.data.ready, root: proxy.getRemote(event.data.ready) })
+                worker.postMessage({ ia32, host: proxy.current })
             })
         }
 
-        function delay (time) {
-            return new Promise(resolve => setTimeout(resolve, time))
+        let proxy, ia32
+
+        if (!self.crossOriginIsolated) {
+            fail('This page is not cross-origin isolated, so <code>SharedArrayBuffer</code> is unavailable. ' +
+                'Serve it with <code>npm run demo</code>, or with the <code>Cross-Origin-Opener-Policy</code> and ' +
+                '<code>Cross-Origin-Embedder-Policy</code> headers described in the README.')
+        } else {
+            ia32 = new Int32Array(new SharedArrayBuffer(1024 * 1024 * 8))
+            proxy = DomProxy.create(ia32, () => window, { deadAfter: 1000 })
+
+            ;(async function () {
+                const b = await spawn('./worker2.js', 'worker B')
+                const a = await spawn('./worker.js', 'worker A')
+
+                const threads = document.getElementById('threads')
+                for (const [name, id] of [['page', proxy.current], ['worker A', a.id], ['worker B', b.id]]) {
+                    const item = document.createElement('li')
+                    item.textContent = `${name}: thread #${id}`
+                    threads.append(item)
+                }
+
+                // a synchronous call into worker A, which builds its UI with synchronous calls back into the page.
+                // The page hands over worker B's function, it never calls it itself.
+                a.root.start(b.root.countPrimes)
+
+                const stop = document.getElementById('stop-b')
+                stop.disabled = false
+                stop.onclick = () => {
+                    b.worker.terminate()
+                    stop.disabled = true
+                    demoLog('page: terminated worker B')
+                }
+            })().catch(err => fail(String(err)))
         }
-
-        (async function () {
-            var worker0 = await spawn()
-            var worker1 = await spawn('./worker2.js')
-
-            // In host
-            worker0.root.callbackFromWorker1 = worker1.root.callbackForWorker0
-
-            run()
-        } ())
     </script>
 </body>
 </html>
