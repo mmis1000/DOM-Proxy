@@ -1,6 +1,6 @@
 # ![Dom-proxy](./public/img/dom-proxy-64.png) WebWorker DOM Proxy (POC)  
 Transparent rpc between web worker and mainland(the main page context)  
-Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparent at the cost of halt the web worker and continue on operation finished with `Atomic.wait`.  
+Looks like [via.js](https://github.com/AshleyScirra/via.js), but more transparent, at the cost of blocking the calling thread with `Atomics.wait` until the operation finishes.  
 
 ## Contents
 1. [Requirements](#Requirements)
@@ -12,22 +12,28 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
       2. [Strict equal of proxied same object](#Strict-equal-of-proxied-same-object)
       3. [The garbage collection](#The-garbage-collection)
    2. [Caveats](#Caveats)
-5. [Todos](#TODOS)
+5. [Tests](#Tests)
+6. [Todos](#TODOS)
 
 
 ## Requirements
 
-1. [SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) (the page must be [cross-origin isolated](https://developer.mozilla.org/en-US/docs/Web/API/Window/crossOriginIsolated))
+1. [SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer), which needs the page to be [cross-origin isolated](https://developer.mozilla.org/en-US/docs/Web/API/Window/crossOriginIsolated).
+   Serve the page (including `index.html` for the demo) with these headers:
+   ```
+   Cross-Origin-Opener-Policy: same-origin
+   Cross-Origin-Embedder-Policy: require-corp
+   ```
 2. [WeakRef](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WeakRef) and [FinalizationRegistry](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry)
-3. [Atomics.waitAsync](https://github.com/tc39/proposal-atomics-wait-async) (`await-async.js` polyfills it)
+3. [Atomics.waitAsync](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync); `await-async.js` installs a polyfill only where the browser has none
 
 ## API
-- DOMProxy.create(`ia32`, `getRoot`) => `[[Payload Object]]`
-  - Call this on both side that want to sue the proxy with same Int32Array baked by SharedArrayBuffer
+- DomProxy.create(`ia32`, `getRoot`) => `[[Payload Object]]`
+  - Call this on every thread that wants to use the proxy, with the same Int32Array backed by a SharedArrayBuffer
   - arguments
-    - ia32: Int32Array baked by SharedArrayBuffer
-    - getRoot : function that return object that represent this thread
-  - **must use only once per thread or it will hang**
+    - ia32: Int32Array backed by a SharedArrayBuffer. Messages are passed through it, so it must be large enough for the largest message (sending a larger one throws)
+    - getRoot : function that returns the object that represents this thread
+  - **call it only once per thread**
 
 - [[Payload Object]] 
   - properties
@@ -37,6 +43,7 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
         - remoteId: other thread's `[[Payload Object]].current`
 
 - No other api required, no async await things, no value wrapper, nothing else
+- An error thrown on the other thread is rethrown in the calling thread
 
 ## Example
 Host
@@ -71,7 +78,7 @@ self.addEventListener('message', function (event) {
     console.log(remoteWindow.location.href)
     console.log(remoteWindow.document.title)
 
-    // strict equal works as is thanks to WeakRef
+    // the same remote object always maps to the same proxy
     console.log(remoteWindow.document === remoteWindow.document)
 
     // object keys got proxied
@@ -97,11 +104,14 @@ self.addEventListener('message', function (event) {
 ## Explanation and caveats
 ### Explanation
 #### Operate on mainland sync
-This library merely proxy traps of `Proxy` to the mainland,  
-so everything should just works as if you are operate on these object in the mainland.
+This library forwards the traps of `Proxy` to the mainland,  
+so everything should just work as if you operated on these objects in the mainland.
 
-The mainland then receive the request async with `Atomic.asyncAwait`.  
-And do things it need to do, response to worker with `Atomic.notify`.
+The calling thread writes the request into the shared buffer, wakes the other side with `Atomics.notify`, and blocks with `Atomics.wait` until the response arrives.  
+An idle thread receives requests with `Atomics.waitAsync`, does what it needs to do, and responds with `Atomics.notify`.  
+Calls can nest in both directions: while waiting for a response, a thread still serves requests made to it, so callbacks into the waiting thread work.
+
+The page itself is not allowed to block with `Atomics.wait`, so when the page calls into a worker it busy-waits for the response instead.
 
 #### Strict equal of proxied same object
 1. This library marked the object it send to worker with an id and save it to a collection with that id.  
@@ -147,7 +157,7 @@ Continue from section above.
 
 How could you prevent the map in mainland and worker from leaking?  
 
-The `WeakRef` proposal introduced two new APIs that allow you to observe the time garbage collection happened.  
+`WeakRef` and `FinalizationRegistry` let you observe when garbage collection happened.  
 So we make use of them.
 
 1. The worker was modified to hold the fakeObject with a `WeakRef` instead of directly to allow the proxy being collected.
@@ -160,8 +170,8 @@ So we make use of them.
 ++ map.set(id, new WeakRef(fakeObject))
 ```
 
-2. The worker use the `FinalizationRegistry` to track when will the garbage collection could happen (no one is holding the proxy anymore).  
-   And send the event to mainland.
+2. The worker uses a `FinalizationRegistry` to learn when the proxy was collected (no one is holding it anymore),  
+   and tells the mainland (collected ids are sent in batches).
 
 ```js
 // mainland
@@ -188,15 +198,16 @@ findIdInMapAndDropIt(map, id)
 ```
 
 ### Caveats
-1. Due to the lack of native `Atomic.asyncAwait`, polyfill is used, the operation is actually far more expensive then it should (each call cost about 0.5ms).
-
-   This means calls like `Object.keys(fakeObject)` will be very slow because it requires to call `getOwnPropertyDescriptor` on every single property (call it on `window` will result in about 200 requests).
-2. Garbage collection relies on `WeakRef` and `FinalizationRegistry`, which can't be polyfilled.
+1. Every property access, call or assignment on a proxy is a blocking round trip to another thread, and only one call chain runs across all threads at a time.
+   Avoid chatty access in hot loops. `Object.keys` and similar fetch every property descriptor of the object in one request.
+2. In browsers without native `Atomics.waitAsync` the polyfill is used, which waits in a helper worker and is far more expensive.
+3. Garbage collection relies on `WeakRef` and `FinalizationRegistry`, which can't be polyfilled. Two objects that only reference each other across threads are never collected.
+4. Values are serialized as JSON, so only strings, numbers, booleans, `null`, `undefined`, objects and functions can be passed (objects and functions are passed as proxies).
 
 ## Tests
 `npm test` runs the rpc and proxy layers with real Node.js worker threads (Node 22+); the main thread plays the page, with `Atomics.wait` disabled as in a browser window.
 
 ## TODOS
-1. Mapping symbol between workers (current throws)
-2. Fix worker count limit (current 256)
-3. Fix object id limit (current 8388608, aka `2**23`)
+1. Mapping symbol between workers (currently throws)
+2. Fix thread count limit (currently 255)
+3. Fix object id limit (currently 8388608, aka `2**23`)

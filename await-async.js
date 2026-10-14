@@ -32,6 +32,9 @@
  */
 
 (function () {
+    // use the native implementation when there is one
+    if (typeof Atomics.waitAsync === 'function') return
+
     let helperCode = `
     onmessage = function (ev) {
         try {
