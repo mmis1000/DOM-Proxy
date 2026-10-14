@@ -1,41 +1,26 @@
 // @ts-check
 
-if (typeof setImmediate === 'undefined') {
-    // @ts-ignore
-    setImmediate = (fn) => {
-        return setTimeout(fn, 0)
-    }
-    // @ts-ignore
-    clearImmediate = clearTimeout
-}
-
 /**
- * 
- * @param {(from: number, message: any)=>any} handler 
- * @param {Int32Array} ia32 
+ *
+ * @param {(from: number, message: any)=>any} handler
+ * @param {Int32Array} ia32
  */
 function listen(handler, ia32) {
     /**
-     * 
-     * @param {*} msg 
-     * @param  {...any} arg 
+     *
+     * @param {*} msg
+     * @param  {...any} arg
      */
     function log (msg, ...arg) {
         console.debug('[#' + Atomics.add(ia32, OFFSET_LOG_ID, 1) + ']: #' + current + ' ' + msg, ...arg)
     }
 
     /**
-     * 
-     * @param {number} GIL 
+     *
+     * @param {number} GIL
      */
     function explainGIL(GIL) {
-        log(`
-            NUM: ${GIL}
-            HEX: ${GIL.toString(16)}
-            STATE: ${field(GIL, MASK_STATE)}
-            FROM: ${field(GIL, MASK_FROM)}
-            TO: ${field(GIL, MASK_TO)}
-        `)
+        return `0x${GIL.toString(16)} (state: ${field(GIL, MASK_STATE)}, from: ${field(GIL, MASK_FROM)}, to: ${field(GIL, MASK_TO)})`
     }
 
     const counter = (() => {
@@ -61,65 +46,13 @@ function listen(handler, ia32) {
         [MASK_STACK_OFFSET]: 24
     }
 
-
-    class AbortError extends Error { }
-
     /**
      * @typedef {'timed-out'|'not-equal'|'ok'} AtomicReturnValue
      */
 
-    /**
-     * @template T
-     * @param {Promise<T>} promise 
-     * @returns {{cancel: ()=>void, promise: Promise<T>}}
-     */
-    function cancelable(promise) {
-        const token = {
-            finished: false,
-            err: null,
-            /**
-             * @param {any} err 
-             */
-            cancel(err) {
-                if (!token.finished) {
-                    token.finished = true
-                    token.err = err
-                    token.cbs.forEach(cb => cb(err))
-                    token.cbs = []
-                }
-            },
-            /**
-             * @type {((err: any)=>void)[]}
-             */
-            cbs: [],
-            /**
-             * 
-             * @param {(err: any)=>void} cb 
-             */
-            onCancel(cb) {
-                if (token.finished) {
-                    cb(token.err)
-                    return
-                }
-
-                token.cbs.push(cb)
-            }
-        }
-
-        return {
-            cancel() {
-                token.cancel(new AbortError('user abort'))
-            },
-            promise: new Promise(function (onResolve, onReject) {
-                token.onCancel(err => onReject(err))
-                promise.then(onResolve, onReject)
-            })
-        }
-    }
-
     const SPIN_LOOP_LIMIT = 100
     /**
-     * Wait sync
+     * Wait sync, falls back to spinning where Atomics.wait is not allowed (the main thread)
      * @param {Int32Array} ia32
      * @param {number} offset
      * @param {number} old
@@ -130,10 +63,7 @@ function listen(handler, ia32) {
         const start = performance.now()
 
         try {
-            // console.trace('block wait start')
-            var res = Atomics.wait(ia32, offset, old, timeout)
-            // log('block wait end')
-            return res
+            return Atomics.wait(ia32, offset, old, timeout)
         } catch (err) { }
 
         while (Atomics.load(ia32, offset) === old) {
@@ -150,19 +80,26 @@ function listen(handler, ia32) {
      * @param {Int32Array} ia32
      * @param {number} offset
      * @param {number} old
-     * @param {number} timeout
+     * @returns {Promise<AtomicReturnValue>}
      */
-    function waitAsync(ia32, offset, old, timeout = Infinity) {
+    function waitAsync(ia32, offset, old) {
         // @ts-ignore
-        return cancelable(Atomics.waitAsync(ia32, offset, old, timeout))
+        const res = Atomics.waitAsync(ia32, offset, old)
+
+        // the polyfill returns a promise, the native one returns { async, value }
+        if (typeof res.then === 'function') {
+            return res
+        }
+
+        return res.async ? res.value : Promise.resolve(res.value)
     }
 
     /**
-     * memory layout
+     * memory layout (offsets are Int32Array indexes)
      * ```
-     * name   Thread index | GIL   | Buffer size | Data          |
-     * value  int32        | int32 | int32       | user provided |
-     * size   4            | 4     | 4           | All - other   |
+     * name   Log id | Thread index | GIL   | Buffer size | Data          |
+     * value  int32  | int32        | int32 | int32       | user provided |
+     * offset 0      | 4            | 8     | 12          | 16 - end      |
      * ```
      */
 
@@ -181,17 +118,21 @@ function listen(handler, ia32) {
     const STATE_SEND = 2
     const STATE_RESPONSE = 3
 
-    let current = 0
+    const MAX_THREAD_ID = 0xff
 
-    while (Atomics.compareExchange(ia32, OFFSET_THREAD_INDEX, current, current + 1) !== current) {
-        current++;
+    // Thread ids start at 1, so a zero `to` field never addresses a real thread
+    // (the idle GIL and the PREPARE state both have to = 0)
+    const current = Atomics.add(ia32, OFFSET_THREAD_INDEX, 1) + 1
+
+    if (current > MAX_THREAD_ID) {
+        throw new Error('too many threads, at most ' + MAX_THREAD_ID + ' are supported')
     }
 
     /**
      * Acquire the GIL
-     * @param {Int32Array} typedArray 
-     * @param {number} index 
-     * @param {number} currentThread 
+     * @param {Int32Array} typedArray
+     * @param {number} index
+     * @param {number} currentThread
      * @returns {{current: number, success: boolean}}
      */
     function acquireGIL(typedArray, index, currentThread) {
@@ -199,10 +140,6 @@ function listen(handler, ia32) {
         const original = Atomics.compareExchange(typedArray, index, 0, newState)
         const success = original === 0
         const current = success ? newState : original
-
-        // if (success) {
-        //     log('set gil to ' + current)
-        // }
 
         return {
             current,
@@ -216,120 +153,89 @@ function listen(handler, ia32) {
      */
     function releaseGIL(typedArray) {
         Atomics.store(typedArray, OFFSET_GIL, 0)
-        Atomics.load(typedArray, OFFSET_GIL)
         Atomics.notify(typedArray, OFFSET_GIL, Infinity)
     }
 
-    let pollSwitch = 1
-    let cancel = () => { }
     /**
-     * stop async the poll loop
+     * whether the GIL holds a request for this thread
+     * @param {number} GIL
+     * @param {number} currentThread
      */
-    function stopAsyncPolling() {
-        if (pollSwitch === 0) {
-            cancel()
-        }
-
-        pollSwitch++
+    function isRequestFor(GIL, currentThread) {
+        return field(GIL, MASK_STATE) === STATE_SEND && field(GIL, MASK_TO) === currentThread
     }
 
     /**
-     * @type {number}
+     * Poll requests while the thread is idle.
+     * Requests that arrive while the thread is blocked in `send` are handled there instead.
+     * @param {Int32Array} ia32
+     * @param {number} currentThread
      */
-    let pendingId = -1
+    async function pollRequests(ia32, currentThread) {
+        while (true) {
+            const GIL = Atomics.load(ia32, OFFSET_GIL)
 
-    /**
-     * start async poll loop
-     * @param {Int32Array} ia32 
-     * @param {number} currentThread 
-     */
-    function startAsyncPolling(ia32, currentThread) {
-        pollSwitch--
-        if (pollSwitch < 0) throw new Error('fuck you')
-        if (pollSwitch !== 0) {
-            return () => {}
-        }
-
-        clearImmediate(pendingId)
-        pendingId = setImmediate(() => {
-            let cancelCurrent = () => { }
-    
-            async function loop() {
-                while (true) {
-                    try {
-                        let { promise, cancel } = pollRequestAsync(ia32, currentThread)
-                        cancelCurrent = cancel
-                        await promise
-    
-                        const GIL = Atomics.load(ia32, OFFSET_GIL)
-                        if (GIL === 0 || field(GIL, MASK_TO) !== currentThread) continue
-    
-                        handleMessage(ia32, currentThread, GIL)
-                    } catch (err) {
-                        if (err instanceof AbortError) {
-                            break
-                        }
-    
-                        // rethrow it anyway
-                        throw err
-                    }
+            if (isRequestFor(GIL, currentThread)) {
+                try {
+                    handleMessage(ia32, currentThread, GIL)
+                } catch (err) {
+                    console.error(err)
                 }
+                continue
             }
-    
-            loop()
-    
-            cancel = () => {
-                // console.trace('called cancel')
-                cancelCurrent()
+
+            // wait on the value we saw rather than on idle,
+            // so a busy GIL doesn't turn this into a hot loop
+            try {
+                await waitAsync(ia32, OFFSET_GIL, GIL)
+            } catch (err) {
+                console.error(err)
+                await new Promise(resolve => setTimeout(resolve, SPIN_LOOP_LIMIT))
             }
-        })
+        }
     }
 
     /**
-     * handle request
-     * @param {Int32Array} ia32 
-     * @param {number} current 
-     * @param {number?} GIL 
+     * @param {any} err
+     * @returns {string}
      */
-    function handleMessage(ia32, current, GIL = null) {
-        GIL = GIL !== null ? GIL: Atomics.load(ia32, OFFSET_GIL)
-        const OLD = GIL
-        const state = field(GIL, MASK_STATE)
+    function errorMessage(err) {
+        return String(err && err.message || err)
+    }
 
-        if (state !== STATE_SEND) {
-            // maybe preparing...
-            wait(ia32, OFFSET_GIL, GIL)
-            GIL = Atomics.load(ia32, OFFSET_GIL)
-        }
-
-        if (field(GIL, MASK_STATE) !== STATE_SEND) {
-            explainGIL(OLD)
-            explainGIL(GIL)
-            throw new Error('bad state 0x' + state.toString(16))
+    /**
+     * handle request, always writes a response back so the sender never hangs
+     * @param {Int32Array} ia32
+     * @param {number} current
+     * @param {number} GIL
+     */
+    function handleMessage(ia32, current, GIL) {
+        if (!isRequestFor(GIL, current)) {
+            throw new Error('not a request for #' + current + ': ' + explainGIL(GIL))
         }
 
         const from = field(GIL, MASK_FROM)
-        const to = field(GIL, MASK_TO)
 
-        if (to !== current) {
-            // whyyy?
-            return
-        }
-
-        const messageSize = Atomics.load(ia32, OFFSET_BUFFER_SIZE)
-        const message = getMessage(ia32, messageSize)
-
+        /** @type {{ok?: any, error?: string}} */
         let response
+        const oldThreadState = threadState
+        threadState = THREAD_STATE_BLOCKING
 
-        if (threadState === THREAD_STATE_BLOCKING) {
-            response = handler(from, message)
-        } else {
-            threadState = THREAD_STATE_BLOCKING
-            response = handler(from, message)
-            threadState = THREAD_STATE_NORMAL
+        try {
+            const message = getMessage(ia32, Atomics.load(ia32, OFFSET_BUFFER_SIZE))
+            response = { ok: handler(from, message) }
+        } catch (err) {
+            response = { error: errorMessage(err) }
+        } finally {
+            threadState = oldThreadState
         }
 
-        const size = setMessage(ia32, response)
+        let size
+        try {
+            size = setMessage(ia32, response)
+        } catch (err) {
+            size = setMessage(ia32, { error: 'failed to send response: ' + errorMessage(err) })
+        }
         Atomics.store(ia32, OFFSET_BUFFER_SIZE, size)
 
         let newGIL =
@@ -337,94 +243,71 @@ function listen(handler, ia32) {
             from << MASK_OFFSET[MASK_TO] |
             STATE_RESPONSE << MASK_OFFSET[MASK_STATE]
 
-        // send the message via GIL if the target is in block mode
         Atomics.store(ia32, OFFSET_GIL, newGIL)
         Atomics.notify(ia32, OFFSET_GIL, Infinity)
     }
 
     /**
-     * poll the request once
-     * @param {Int32Array} ia32 
-     * @param {number} currentThread 
-     */
-    function pollRequestAsync(ia32, currentThread) {
-        const IDLE = 0
-
-        const GIL = Atomics.load(ia32, OFFSET_GIL)
-
-        if (GIL !== IDLE) {
-            return {
-                cancel () {},
-                promise: Promise.resolve('not-equal')
-            }
-        }
-
-        const { cancel, promise } = waitAsync(ia32, OFFSET_GIL, IDLE)
-
-        return {
-            cancel,
-            promise: promise.then((res) => {
-                return res
-            })
-        }
-    }
-
-    /**
-     * poll the response back
-     * @param {Int32Array} ia32 
-     * @param {number} GIL 
+     * poll the response back, handling any request sent to us in the meantime
+     * @param {Int32Array} ia32
      * @param {number} currentThread
      * @param {number} target
+     * @returns {{ok?: any, error?: string}}
      */
-    function pollResponse(ia32, GIL, currentThread, target) {
-        while (true) {
-            let to;
-            let from;
-            let state;
-            do {
-                wait(ia32, OFFSET_GIL, GIL)
-                GIL = Atomics.load(ia32, OFFSET_GIL)
-                to = field(GIL, MASK_TO)
-                from = field(GIL, MASK_FROM)
-                state = field(GIL, MASK_STATE)
-            } while (to !== currentThread)
+    function pollResponse(ia32, currentThread, target) {
+        let GIL = Atomics.load(ia32, OFFSET_GIL)
 
-            if (field(GIL, MASK_STATE) === STATE_RESPONSE && from === target) {
-                return getMessage(ia32, Atomics.load(ia32, OFFSET_BUFFER_SIZE))
-            } else if (field(GIL, MASK_STATE) === STATE_SEND) {
-                // we got a side quest
-                stopAsyncPolling()
-                handleMessage(ia32, currentThread, GIL)
-                startAsyncPolling(ia32, currentThread)
-            } else {
-                // we fuck up, really hard
-                // debugger;
+        while (true) {
+            if (field(GIL, MASK_TO) === currentThread) {
+                const state = field(GIL, MASK_STATE)
+
+                if (state === STATE_RESPONSE && field(GIL, MASK_FROM) === target) {
+                    return getMessage(ia32, Atomics.load(ia32, OFFSET_BUFFER_SIZE))
+                }
+
+                if (state === STATE_SEND) {
+                    // we got a side quest
+                    handleMessage(ia32, currentThread, GIL)
+                    GIL = Atomics.load(ia32, OFFSET_GIL)
+                    continue
+                }
+
+                throw new Error('unexpected GIL state while waiting for #' + target + ': ' + explainGIL(GIL))
             }
+
+            wait(ia32, OFFSET_GIL, GIL)
+            GIL = Atomics.load(ia32, OFFSET_GIL)
         }
     }
 
     /**
      * access bit field
-     * @param {number} GIL 
-     * @param {number} field 
+     * @param {number} GIL
+     * @param {number} field
      */
     function field(GIL, field) {
-        return (GIL & MASK[field]) >> MASK_OFFSET[field]
+        return (GIL & MASK[field]) >>> MASK_OFFSET[field]
     }
 
     const encoder = new TextEncoder()
     /**
-     * 
-     * @param {Int32Array} int32 
-     * @param {any} message 
+     *
+     * @param {Int32Array} int32
+     * @param {any} message
      * @returns {number} set size
      */
     function setMessage(int32, message) {
         /**
          * @type {SharedArrayBuffer}
          */
-        const sab = (int32.buffer)
+        const sab = /** @type {any} */ (int32.buffer)
         const encoded = encoder.encode(JSON.stringify(message))
+        const capacity = sab.byteLength - OFFSET_DATA * 4
+
+        if (encoded.byteLength > capacity) {
+            throw new RangeError('message too large: ' + encoded.byteLength + ' bytes, buffer holds ' + capacity)
+        }
+
         const targetBuffer = new Uint8Array(sab, OFFSET_DATA * 4, encoded.byteLength)
         targetBuffer.set(encoded)
 
@@ -433,16 +316,16 @@ function listen(handler, ia32) {
 
     const decoder = new TextDecoder()
     /**
-     * 
-     * @param {Int32Array} int32  
-     * @param {number} size  
+     *
+     * @param {Int32Array} int32
+     * @param {number} size
      * @returns {any}
      */
     function getMessage(int32, size) {
         /**
          * @type {SharedArrayBuffer}
          */
-        const sab = (int32.buffer)
+        const sab = /** @type {any} */ (int32.buffer)
         const targetBuffer = new Uint8Array(new Uint8Array(sab, OFFSET_DATA * 4, size))
         const text = decoder.decode(targetBuffer)
 
@@ -453,49 +336,54 @@ function listen(handler, ia32) {
     const THREAD_STATE_BLOCKING = 1
     let threadState = THREAD_STATE_NORMAL
     /**
-     * @param {Int32Array} ia32 
-     * @param {number} currentThread 
-     * @param {number} targetThread 
+     * @param {Int32Array} ia32
+     * @param {number} currentThread
+     * @param {number} targetThread
      * @param {any} message
      */
     function send(ia32, currentThread, targetThread, message) {
         function actualSend() {
-            let GIL =
-                currentThread << MASK_OFFSET[MASK_FROM] |
-                targetThread << MASK_OFFSET[MASK_TO] |
-                STATE_SEND << MASK_OFFSET[MASK_STATE]
-
             if (currentThread === targetThread) {
                 console.trace('you can\'t send to yourself!!!')
                 throw new Error('err')
             }
 
-            
+            let GIL =
+                currentThread << MASK_OFFSET[MASK_FROM] |
+                targetThread << MASK_OFFSET[MASK_TO] |
+                STATE_SEND << MASK_OFFSET[MASK_STATE]
+
+            // may throw (unserializable / too large), nothing is published yet if it does
             var size = setMessage(ia32, message)
             Atomics.store(ia32, OFFSET_BUFFER_SIZE, size)
 
-            // send the message via GIL if the target is in block mode
             Atomics.store(ia32, OFFSET_GIL, GIL)
-
-            Atomics.load(ia32, OFFSET_GIL)
-
-            // send the message via GIL if the target is in block mode
             Atomics.notify(ia32, OFFSET_GIL, Infinity)
 
-            return pollResponse(ia32, GIL, currentThread, targetThread)
+            const response = pollResponse(ia32, currentThread, targetThread)
+
+            if (response.error !== undefined) {
+                throw new Error(response.error)
+            }
+
+            return response.ok
         }
 
-        if (threadState === THREAD_STATE_NORMAL) {
-            // async mode
+        if (threadState === THREAD_STATE_BLOCKING) {
+            // sync mode, in middle of handling a message sync ...etc
+            // the GIL belongs to the call chain we are part of, just send it directly and hard wait
+            return actualSend()
+        }
 
+        // async mode
+        threadState = THREAD_STATE_BLOCKING
+
+        try {
             // try acquire GIL
             let { success, current: currentGIL } = acquireGIL(ia32, OFFSET_GIL, currentThread)
 
-            threadState = THREAD_STATE_BLOCKING
-
             while (!success) {
-                // handle the state
-                if (currentGIL !== 0 && field(currentGIL, MASK_TO) === currentThread && field(currentGIL, MASK_STATE) === STATE_SEND) {
+                if (isRequestFor(currentGIL, currentThread)) {
                     // This will block until all triggered rpc exited, includes those trigger in the middle
                     handleMessage(ia32, currentThread, currentGIL)
                 } else {
@@ -508,21 +396,17 @@ function listen(handler, ia32) {
                 currentGIL = result.current
             }
 
-            const result = actualSend()
-
+            try {
+                return actualSend()
+            } finally {
+                releaseGIL(ia32)
+            }
+        } finally {
             threadState = THREAD_STATE_NORMAL
-
-            releaseGIL(ia32)
-
-            return result
-        } else {
-            // sync mode, in middle of handling a message sync ...etc
-            // just send it directly and hard wait
-            return actualSend()
         }
     }
 
-    startAsyncPolling(ia32, current)
+    pollRequests(ia32, current)
 
     return {
         current,
@@ -531,5 +415,5 @@ function listen(handler, ia32) {
             console.debug(message)
             return send(ia32, current, targetThread, message)
         }
-    } 
+    }
 }
