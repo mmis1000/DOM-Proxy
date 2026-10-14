@@ -19,7 +19,7 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), but more transparen
 ## Requirements
 
 1. [SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer), which needs the page to be [cross-origin isolated](https://developer.mozilla.org/en-US/docs/Web/API/Window/crossOriginIsolated).
-   Serve the page (including `index.html` for the demo) with these headers:
+   Serve the page with these headers (`npm run demo` serves `index.html` with them at http://localhost:8080/):
    ```
    Cross-Origin-Opener-Policy: same-origin
    Cross-Origin-Embedder-Policy: require-corp
@@ -205,7 +205,9 @@ findIdInMapAndDropIt(map, id)
 4. Values are serialized as JSON, so only strings, numbers, booleans, `null`, `undefined`, objects and functions can be passed (objects and functions are passed as proxies).
 
 ## Tests
-`npm test` runs the rpc and proxy layers with real Node.js worker threads (Node 22+); the main thread plays the page, with `Atomics.wait` disabled as in a browser window.
+- `npm test` runs the rpc and proxy layers with real Node.js worker threads (Node 22+); the main thread plays the page, with `Atomics.wait` disabled as in a browser window.
+- `npm run test:browser` runs the demo page in Chromium through Playwright, with native `Atomics.waitAsync` and with the `await-async.js` polyfill.
+  Run `npm install` and `npx playwright install chromium` first.
 
 ## TODOS
 1. Mapping symbol between workers (currently throws)

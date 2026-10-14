@@ -4,7 +4,9 @@
   "description": "Transparent rpc between web worker and mainland(the main page context)   Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparent at the cost of halt the web worker and continue on operation finished with `Atomic.wait`.",
   "main": "dom-proxy.js",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:browser": "node --test test/browser/*.test.js",
+    "demo": "node serve.js"
   },
   "repository": {
     "type": "git",
@@ -15,5 +17,8 @@
   "bugs": {
     "url": "https://github.com/mmis1000/DOM-Proxy/issues"
   },
-  "homepage": "https://github.com/mmis1000/DOM-Proxy#readme"
+  "homepage": "https://github.com/mmis1000/DOM-Proxy#readme",
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
 }
