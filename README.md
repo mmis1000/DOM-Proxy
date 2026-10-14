@@ -221,9 +221,12 @@ All calls share one lock, so a thread that dies or hangs in the middle of a call
 2. In browsers without native `Atomics.waitAsync` the polyfill is used, which waits in a helper worker and is far more expensive.
 3. Garbage collection relies on `WeakRef` and `FinalizationRegistry`, which can't be polyfilled. Two objects that only reference each other across threads are never collected.
 4. Primitives (including `NaN`, `-0`, `Infinity` and `BigInt`) are copied exactly, objects and functions are passed as proxies.
-   Well-known symbols (`Symbol.iterator`, `Symbol.toPrimitive`...) and registered ones (`Symbol.for`) work as values and keys, so `for...of`, spreading, template literals and `instanceof` work on proxies.
-   A unique symbol (`Symbol()`) can't be passed yet: passing one throws, and reading such a key from a proxy gives `undefined`.
-5. A proxy is not an array to `Array.isArray`, and every property it reports is configurable (a non-configurable one would conflict with the proxy's placeholder target).
+   Symbols work as values and keys, so `for...of`, spreading, template literals and `instanceof` work on proxies.
+   Well-known symbols (`Symbol.iterator`...) and registered ones (`Symbol.for`) are the same symbol on every thread.
+   A unique symbol (`Symbol()`) shows up on another thread as a stand-in symbol with the same description; each thread has one stand-in per symbol, and passing it back gives the original.
+   Stand-ins are garbage collected like proxies on engines that can hold symbols weakly (ES2023); elsewhere every unique symbol that crossed threads is kept forever.
+5. Arrays are passed as proxies whose target is an array, so `Array.isArray`, `JSON.stringify` and `concat` treat them as arrays.
+   Apart from an array's `length`, every property a proxy reports is configurable (a non-configurable one would conflict with the proxy's placeholder target).
 6. A thread that dies before its heartbeat started (within milliseconds of starting, or while it is busy right after starting) counts as alive. Chromium takes a few seconds to actually stop a busy worker after `terminate()`, so its death is noticed only then.
    Objects the dead thread had received stay referenced on the threads that own them.
 
@@ -233,6 +236,5 @@ All calls share one lock, so a thread that dies or hangs in the middle of a call
   Run `npm install` and `npx playwright install chromium` first.
 
 ## TODOS
-1. Mapping unique symbols between workers (currently throws)
-2. Fix thread count limit (currently 255)
-3. Fix object id limit (currently 8388608, aka `2**23`)
+1. Fix thread count limit (currently 255)
+2. Fix object id limit (currently 8388608, aka `2**23`)

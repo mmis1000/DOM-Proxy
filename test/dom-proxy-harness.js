@@ -76,9 +76,8 @@ if (!isMainThread) {
             eq(Object.getOwnPropertySymbols(page.tagged).map(String), ['Symbol(dom-proxy.test)', 'Symbol(Symbol.toStringTag)'], 'symbol keys')
 
             const local = Symbol('local')
-            eq(page.tagged[local], undefined, 'unique symbol get')
+            eq(page.tagged[local], undefined, 'unique symbol the page never saw')
             eq(local in page.tagged, false, 'unique symbol in')
-            expectThrow(() => { page.tagged[local] = 1 }, TypeError, 'unique symbol set')
 
             eq('list' in page, true, 'in, existing')
             eq('nope' in page, false, 'in, missing')
@@ -93,6 +92,41 @@ if (!isMainThread) {
             const setterOnly = Object.getOwnPropertyDescriptor(page.withSetter, 'only')
             eq([typeof setterOnly?.get, typeof setterOnly?.set], ['undefined', 'function'], 'setter only accessor')
         },
+        arrays() {
+            eq(Array.isArray(page.list), true, 'Array.isArray')
+            eq(Array.isArray(page.nested), false, 'Array.isArray on an object')
+            eq(JSON.stringify(page.list), '[1,2,3]', 'JSON.stringify')
+            eq(Object.keys(page.list), ['0', '1', '2'], 'Object.keys')
+            eq(Object.getOwnPropertyDescriptor(page.list, 'length'), { value: 3, writable: true, enumerable: false, configurable: false }, 'length descriptor')
+            eq([0].concat(page.list), [0, 1, 2, 3], 'concat spreads it')
+            page.list.push(4)
+            eq(page.list.length, 4, 'push')
+            eq(Object.getOwnPropertyDescriptor(page.frozen, 'length'), { value: 1, writable: false, enumerable: false, configurable: false }, 'frozen length')
+            eq(page.frozen.length, 1, 'frozen length read')
+            eq(page.identity(page.list) === page.list, true, 'identity when sent back')
+            eq(page.isArray(page.list), true, 'still an array on the page')
+            page.fromWorker = [5, 6]
+        },
+        'unique symbols'() {
+            const secret = page.secret
+            eq(typeof secret, 'symbol', 'type')
+            eq(secret.description, 'secret', 'description')
+            eq(page.secret === secret, true, 'same stand-in every time')
+            eq(page.withSecret[secret], 1, 'as a key')
+            eq(Object.getOwnPropertySymbols(page.withSecret)[0] === secret, true, 'from ownKeys')
+            eq(page.isSecret(secret), true, 'the original on the page')
+
+            const mine = Symbol('mine')
+            page.withSecret[mine] = 2
+            eq(page.withSecret[mine], 2, 'own symbol as a key')
+            page.store(mine)
+            eq(page.stored() === mine, true, 'own symbol comes back as itself')
+            eq(page.isStored(mine), true, 'the page has one stand-in for it')
+            eq(page.identity(Symbol()).description, undefined, 'no description')
+        },
+        'fetch and drop symbols'() {
+            for (let i = 0; i < 20; i++) page.makeSymbol()
+        },
         values() {
             const s = page.special
             eq([Number.isNaN(s.nan), Object.is(s.negZero, -0), s.inf === Infinity, s.negInf === -Infinity, s.big === 10n], [true, true, true, true, true], 'from the page')
@@ -102,7 +136,6 @@ if (!isMainThread) {
             }
             eq(page.identity(Symbol.iterator) === Symbol.iterator, true, 'well-known symbol value')
             eq(page.identity(Symbol.for('k')) === Symbol.for('k'), true, 'registered symbol value')
-            expectThrow(() => page.identity(Symbol('u')), TypeError, 'unique symbol value')
 
             page.got = { negZero: -0, nan: NaN, big: 3n }
         },
@@ -143,8 +176,27 @@ if (!isMainThread) {
         }
     }
 
+    const secret = Symbol('secret')
+    /** @type {symbol | undefined} */
+    let stored
+    /** @type {WeakRef<any>[]} */
+    const madeSymbols = []
+
     /** @type {any} */
     const pageRoot = {
+        frozen: Object.freeze([1]),
+        isArray: (/** @type {any} */ x) => Array.isArray(x),
+        secret,
+        withSecret: { [secret]: 1 },
+        isSecret: (/** @type {any} */ x) => x === secret,
+        store: (/** @type {symbol} */ x) => { stored = x },
+        stored: () => stored,
+        isStored: (/** @type {any} */ x) => x === stored,
+        makeSymbol() {
+            const symbol = Symbol('made')
+            madeSymbols.push(new WeakRef(/** @type {any} */ (symbol)))
+            return symbol
+        },
         list: [1, 2, 3],
         date: new Date(0),
         Point,
@@ -204,6 +256,30 @@ if (!isMainThread) {
             await w.run('symbols and syntax')
             eq('temp' in pageRoot, false, 'deleted by the worker')
             eq(Object.getOwnPropertyDescriptor(pageRoot, 'defined'), { value: 5, writable: true, enumerable: true, configurable: true }, 'defined by the worker')
+        },
+
+        async 'arrays are arrays on the other side'() {
+            const w = await spawn()
+            await w.run('arrays')
+            eq(pageRoot.list, [1, 2, 3, 4], 'pushed by the worker')
+            eq(Array.isArray(pageRoot.fromWorker), true, 'worker array on the page')
+            eq([...pageRoot.fromWorker], [5, 6], 'worker array content')
+        },
+
+        async 'unique symbols keep their identity'() {
+            const w = await spawn()
+            await w.run('unique symbols')
+            eq(typeof stored, 'symbol', 'stand-in on the page')
+            eq(Object.getOwnPropertySymbols(pageRoot.withSecret).length, 2, 'key set by the worker')
+        },
+
+        async 'collected stand-in symbols release the page symbols'() {
+            const w = await spawn()
+            await w.run('fetch and drop symbols')
+            eq(madeSymbols.length, 20, 'symbols made')
+            await w.run('collect')
+            await collectGarbage()
+            eq(madeSymbols.filter(ref => ref.deref() !== undefined).length, 0, 'page symbols still alive')
         },
 
         async 'values keep their exact value between threads'() {

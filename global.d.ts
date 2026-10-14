@@ -5,6 +5,8 @@ interface ValuePrimitive {
 interface ValueObject {
     type: 'object'
     ref: number
+    /** set for arrays, so the proxy's target can be an array too */
+    array?: boolean
 }
 interface ValueFunction {
     type: 'function'
@@ -20,11 +22,13 @@ interface ValueBigInt {
     type: 'bigint'
     value: string
 }
-/** well-known symbols travel by name, registered ones (Symbol.for) by key */
+/** well-known symbols travel by name, registered ones (Symbol.for) by key, unique ones by id like objects */
 interface ValueSymbol {
     type: 'symbol'
     wellKnown?: string
     key?: string
+    ref?: number
+    description?: string
 }
 
 type Value = ValuePrimitive | ValueNumber | ValueBigInt | ValueSymbol | ValueObject | ValueFunction

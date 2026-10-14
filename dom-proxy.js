@@ -60,50 +60,73 @@ globalThis.DomProxy = {
         }
     
         /**
-         * @extends { WeakMap<T, U> }
-         * @template {{}} T
-         * @template U
+         * whether the engine can hold unique symbols weakly (ES2023),
+         * otherwise symbols that crossed threads are kept forever
          */
-        class AutoMap extends WeakMap {
-            /**
-             * @param {U} defaultValue 
-             */
-            constructor(defaultValue) {
-                super()
-                this.defaultValue = defaultValue
+        const weakSymbols = (() => {
+            try {
+                new WeakMap().set(/** @type {any} */ (Symbol()), 0)
+                new WeakRef(/** @type {any} */ (Symbol()))
+                new FinalizationRegistry(() => { }).register(/** @type {any} */ (Symbol()), 0)
+                return true
+            } catch (err) {
+                return false
+            }
+        })()
+
+        /**
+         * a WeakMap that also takes unique symbols, holding them strongly where the engine can't hold them weakly
+         */
+        class IdMap {
+            constructor() {
+                /** @type {WeakMap<any, number>} */
+                this.weak = new WeakMap()
+                /** @type {Map<any, number>} */
+                this.strong = new Map()
+            }
+            /** @param {any} key */
+            store(key) {
+                return typeof key === 'symbol' && !weakSymbols ? this.strong : this.weak
+            }
+            /** @param {any} key */
+            get(key) {
+                return this.store(key).get(key)
+            }
+            /** @param {any} key */
+            has(key) {
+                return this.store(key).has(key)
             }
             /**
-             * @param {T} key 
+             * @param {any} key
+             * @param {number} value
              */
-            get(key) {
-                const result = super.get(key)
-                if (result == null) return this.defaultValue;
-                return result
+            set(key, value) {
+                this.store(key).set(key, value)
+            }
+            /** @param {any} key */
+            delete(key) {
+                this.store(key).delete(key)
             }
         }
     
         /**
-         * @type {AutoMap<any, number>}
+         * how many proxies other threads hold for each of our ids
+         * @type {Map<number, number>}
          */
-        const selfRefs = new AutoMap(0)
+        const selfRefs = new Map()
     
         /**
          * @type {Map<number, any>}
          */
         const selfIdToItem = new Map()
     
-        /**
-         * @type {WeakMap<any, number>}
-         */
-        const selfItemToId = new WeakMap()
+        const selfItemToId = new IdMap()
+    
+        const remoteObjectToId = new IdMap()
     
         /**
-         * @type {WeakMap<any, number>}
-         */
-        const remoteObjectToId = new WeakMap()
-    
-        /**
-         * @type {Map<number, WeakRef<any>>}
+         * a WeakRef, or a strong stand-in for symbols where those can't be held weakly
+         * @type {Map<number, { deref(): any }>}
          */
         const remoteIdToObject = new Map()
     
@@ -322,7 +345,7 @@ globalThis.DomProxy = {
 
         /**
          * @param {symbol} symbol
-         * @returns {ValueSymbol | null} null for a unique symbol, those can't be mapped between threads yet
+         * @returns {ValueSymbol}
          */
         function encodeSymbol(symbol) {
             const name = wellKnownSymbols.get(symbol)
@@ -335,7 +358,8 @@ globalThis.DomProxy = {
                 return { type: 'symbol', key }
             }
 
-            return null
+            // a unique symbol gets an id like an object, the other side makes one stand-in symbol per id
+            return { type: 'symbol', ref: getIdFromObject(symbol), description: symbol.description }
         }
 
         /**
@@ -351,12 +375,16 @@ globalThis.DomProxy = {
                 return symbol
             }
 
+            if (value.ref !== undefined) {
+                return getObjectFromId(value.ref, 'symbol', value.description)
+            }
+
             return Symbol.for(/** @type {string} */ (value.key))
         }
 
         /**
          * @param {string | symbol} key
-         * @returns {Key | null} null for a unique symbol
+         * @returns {Key}
          */
         function encodeKey(key) {
             return typeof key === 'string' ? key : encodeSymbol(key)
@@ -371,19 +399,52 @@ globalThis.DomProxy = {
         }
 
         /**
+         * Proxy invariant: a property that is non-configurable on the placeholder target (the `length` of an array)
+         * must be reported non-configurable, and once the real one is read-only, the target's must be read-only
+         * with the same value too.
+         * @param {any} target
          * @param {string | symbol} key
+         * @param {PropertyDescriptor} descriptor
          */
-        function uniqueSymbolError(key) {
-            return new TypeError('can\'t use a unique symbol on an object of another thread: ' + String(key))
+        function fitToTarget(target, key, descriptor) {
+            const own = Reflect.getOwnPropertyDescriptor(target, key)
+
+            if (!own || own.configurable) {
+                return descriptor
+            }
+
+            descriptor.configurable = false
+
+            if (own.writable && descriptor.writable === false) {
+                Object.defineProperty(target, key, { value: descriptor.value, writable: false })
+            }
+
+            return descriptor
+        }
+
+        /**
+         * remember a proxy or stand-in symbol made for a remote id
+         * @param {number} id
+         * @param {any} item
+         */
+        function rememberRemote(id, item) {
+            if (typeof item === 'symbol' && !weakSymbols) {
+                remoteIdToObject.set(id, { deref: () => item })
+            } else {
+                remoteIdToObject.set(id, new WeakRef(item))
+                cleaner.register(item, id)
+            }
+            remoteObjectToId.set(item, id)
         }
 
         /**
          * get object from object id
          * @param {number} id 
-         * @param {null |"function"|"object"} type
+         * @param {null |"function"|"object"|"array"|"symbol"} type
+         * @param {string} [description] of a symbol
          * @returns {any}
          */
-        function getObjectFromId(id, type = "object") {
+        function getObjectFromId(id, type = "object", description) {
             if (isRemoteId(id)) {
                 const ref = remoteIdToObject.get(id)
                 const existing = ref && ref.deref()
@@ -391,20 +452,25 @@ globalThis.DomProxy = {
                     if (type === null) {
                         throw new Error('unknown id')
                     }
+
+                    refRemote(id)
+
+                    if (type === 'symbol') {
+                        const symbol = Symbol(description)
+                        rememberRemote(id, symbol)
+                        return symbol
+                    }
     
                     // a bound function has no own `prototype`, which would be non-configurable
-                    // and make ownKeys fail for remote functions that don't have one either
-                    const proto = type === 'function' ? function PlaceHolder () {}.bind(null) : {}
+                    // and make ownKeys fail for remote functions that don't have one either.
+                    // Array.isArray looks at the target, so arrays get an array.
+                    const proto = type === 'function' ? function PlaceHolder () {}.bind(null) : type === 'array' ? [] : {}
                     const owner = getOwnerAndId(id)[0]
-    
-                    refRemote(id)
     
                     const proxy = new Proxy(proto, {
                         get(target, p, receiver) {
                             preloadedDescriptors = null
                             const key = encodeKey(p)
-                            // the remote object can't have a key that never left this thread
-                            if (key === null) return undefined
 
                             return convertToRaw(rpcSendMayThrow(owner, /** @type {CommandPropertyGet} */({
                                 type: 'get',
@@ -415,7 +481,6 @@ globalThis.DomProxy = {
                         set(target, p, value, receiver) {
                             preloadedDescriptors = null
                             const key = encodeKey(p)
-                            if (key === null) throw uniqueSymbolError(p)
 
                             return rpcSendMayThrow(owner, /** @type {CommandPropertySet} */({
                                 type: 'set',
@@ -427,7 +492,6 @@ globalThis.DomProxy = {
                         has(target, p) {
                             preloadedDescriptors = null
                             const key = encodeKey(p)
-                            if (key === null) return false
 
                             return rpcSendMayThrow(owner, /** @type {CommandHas} */({
                                 type: 'has',
@@ -438,7 +502,6 @@ globalThis.DomProxy = {
                         deleteProperty(target, p) {
                             preloadedDescriptors = null
                             const key = encodeKey(p)
-                            if (key === null) return true
 
                             return rpcSendMayThrow(owner, /** @type {CommandDelete} */({
                                 type: 'delete',
@@ -449,7 +512,6 @@ globalThis.DomProxy = {
                         defineProperty(target, p, descriptor) {
                             preloadedDescriptors = null
                             const key = encodeKey(p)
-                            if (key === null) throw uniqueSymbolError(p)
 
                             return rpcSendMayThrow(owner, /** @type {CommandDefineProperty} */({
                                 type: 'defineProperty',
@@ -474,7 +536,7 @@ globalThis.DomProxy = {
                                 const map = new Map()
 
                                 keys.forEach((key, index) => {
-                                    map.set(key, unmapDescriptor(res.preloadDescriptor[index]))
+                                    map.set(key, fitToTarget(target, key, unmapDescriptor(res.preloadDescriptor[index])))
                                 })
 
                                 preloadedDescriptors = { id, map }
@@ -489,7 +551,6 @@ globalThis.DomProxy = {
 
                             preloadedDescriptors = null
                             const key = encodeKey(p)
-                            if (key === null) return undefined
 
                             const res = rpcSendMayThrow(owner, /** @type {CommandPropertyGetDescriptor} */({
                                 type: "getDescriptor",
@@ -497,7 +558,7 @@ globalThis.DomProxy = {
                                 property: key
                             })).descriptor
 
-                            return res === null ? undefined : unmapDescriptor(res)
+                            return res === null ? undefined : fitToTarget(target, p, unmapDescriptor(res))
                         },
                         construct(target, argArray, newTarget) {
                             preloadedDescriptors = null
@@ -525,9 +586,7 @@ globalThis.DomProxy = {
                         }
                     })
                     
-                    remoteIdToObject.set(id, new WeakRef(proxy))
-                    remoteObjectToId.set(proxy, id)
-                    cleaner.register(proxy, id)
+                    rememberRemote(id, proxy)
                     return proxy
                 }
 
@@ -556,10 +615,9 @@ globalThis.DomProxy = {
     
                 const newId = currentObjectId++
                 const merged = getMergedId(currentThread, newId)
-                if (typeof obj !== 'function' && typeof obj !== 'object') debugger
                 selfIdToItem.set(merged, obj)
                 selfItemToId.set(obj, merged)
-                selfRefs.set(obj, 0)
+                selfRefs.set(merged, 0)
                 return merged
             }
         }
@@ -602,16 +660,16 @@ globalThis.DomProxy = {
                         value: arg.toString()
                     }
                 case "symbol":
-                    const symbol = encodeSymbol(arg)
-                    if (symbol === null) {
-                        throw new TypeError('can\'t pass a unique symbol to another thread: ' + String(arg))
-                    }
-                    return symbol
+                    return encodeSymbol(arg)
                 case "object":
-                    return {
+                    /** @type {ValueObject} */
+                    const value = {
                         type: "object",
                         ref: getIdFromObject(arg)
                     }
+                    // the other side needs an array placeholder for Array.isArray
+                    if (Array.isArray(arg)) value.array = true
+                    return value
                 case "function":
                     return {
                         type: "function",
@@ -637,7 +695,7 @@ globalThis.DomProxy = {
                 case "symbol":
                     return decodeSymbol(arg)
                 case "object":
-                    return getObjectFromId(arg.ref, "object")
+                    return getObjectFromId(arg.ref, arg.array ? "array" : "object")
                 case "function":
                     return getObjectFromId(arg.ref, "function")
             }
@@ -697,6 +755,26 @@ globalThis.DomProxy = {
         }
 
         /**
+         * another thread made or dropped proxies for one of our ids,
+         * once none is left the id is forgotten
+         * @param {number} id
+         * @param {number} change
+         */
+        function changeRefs(id, change) {
+            if (!selfIdToItem.has(id)) return
+
+            const count = (selfRefs.get(id) || 0) + change
+
+            if (count <= 0) {
+                selfItemToId.delete(selfIdToItem.get(id))
+                selfIdToItem.delete(id)
+                selfRefs.delete(id)
+            } else {
+                selfRefs.set(id, count)
+            }
+        }
+
+        /**
          * handle remote request
          * @param {number} from 
          * @param {Command} message 
@@ -734,42 +812,19 @@ globalThis.DomProxy = {
                             )
                         }
                     case "ref":
-                        var object = getObjectFromId(message.id)
-                        var old = selfRefs.get(object)
-                        selfRefs.set(object, old + 1)
+                        changeRefs(message.id, 1)
                         return {}
                     case "ref-many":
                         for (let id of message.ids) {
-                            var object = getObjectFromId(id)
-                            var old = selfRefs.get(object)
-                            selfRefs.set(object, old + 1)
+                            changeRefs(id, 1)
                         }
-
                         return {}
                     case "unref":
-                        var object = getObjectFromId(message.id)
-                        var old = selfRefs.get(object)
-                        var newValue = old - 1
-                        if (newValue === 0) {
-                            selfRefs.delete(object)
-                            selfIdToItem.delete(message.id)
-                            selfItemToId.delete(object)
-                        } else {
-                            selfRefs.set(object, newValue)
-                        }
+                        changeRefs(message.id, -1)
                         return {}
                     case "unref-many":
                         for (let id of message.ids) {
-                            var object = getObjectFromId(id)
-                            var old = selfRefs.get(object)
-                            var newValue = old - 1
-                            if (newValue === 0) {
-                                selfRefs.delete(object)
-                                selfIdToItem.delete(id)
-                                selfItemToId.delete(object)
-                            } else {
-                                selfRefs.set(object, newValue)
-                            }
+                            changeRefs(id, -1)
                         }
                         return {}
                     case "getDescriptor":
@@ -781,13 +836,10 @@ globalThis.DomProxy = {
                     case "getProperties":
                         var object = getObjectFromId(message.id)
                         var keys = Reflect.ownKeys(object)
-                            .map(key => /** @type {[string | symbol, Key | null]} */ ([key, encodeKey(key)]))
-                            // unique symbols can't be mapped, leave them out
-                            .filter(pair => pair[1] !== null)
                         return {
-                            properties: keys.map(pair => /** @type {Key} */ (pair[1])),
-                            preloadDescriptor: keys.map(pair => mapDescriptor(
-                                /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(object, pair[0]))
+                            properties: keys.map(encodeKey),
+                            preloadDescriptor: keys.map(key => mapDescriptor(
+                                /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(object, key))
                             ))
                         }
                     case "construct":
