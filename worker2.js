@@ -1,33 +1,28 @@
-importScripts('./await-async.js')
-importScripts('./rpc.js')
-importScripts('./dom-proxy.js')
+// Worker B: does the heavy lifting for worker A
+importScripts('./await-async.js', './rpc.js', './dom-proxy.js')
 
-let ia32
-let host
-let window
-let document
-self.addEventListener('message', event => {
-    var data = event.data
+self.onmessage = event => {
+    const { ia32, host } = event.data
+    const proxy = DomProxy.create(ia32, () => self, { deadAfter: 1000 })
+    const window = proxy.getRemote(host)
 
-    if (data.command === 'init') {
-        ia32 = data.ia32
+    /**
+     * count the primes below `limit` with a sieve
+     * @param {number} limit
+     */
+    self.countPrimes = limit => {
+        const composite = new Uint8Array(limit)
+        let count = 0
 
-        const proxy = DomProxy.create(ia32, () => self)
-
-        current = proxy.current
-        
-        window = proxy.getRemote(data.host)
-        document = window.document
-
-        // In worker 1
-        self.callbackForWorker0 = function () {
-            console.log('called in worker2')
+        for (let i = 2; i < limit; i++) {
+            if (composite[i]) continue
+            count++
+            for (let j = i * i; j < limit; j += i) composite[j] = 1
         }
 
-
-        self.postMessage({
-            command: 'ready',
-            current
-        })
+        window.demoLog(`worker B: counted primes below ${limit}`)
+        return count
     }
-})
+
+    self.postMessage({ ready: proxy.current })
+}

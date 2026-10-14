@@ -1,19 +1,3 @@
-declare class WeakRef<T> {
-    constructor (val: T)
-    deref(): T|undefined
-}
-
-/**
- * @template T Value
- * @template U Unregister token
- * @template V Holding value
- */
-declare class FinalizationGroup<T, U, V> {
-    constructor (cb: (iter: Iterable<V>)=>void)
-    register(target: T, holding: V, token: U): void
-    unregister(token: U): void
-}
-
 interface ValuePrimitive {
     type: 'primitive'
     value: null | undefined | boolean | number | string
@@ -21,13 +5,36 @@ interface ValuePrimitive {
 interface ValueObject {
     type: 'object'
     ref: number
+    /** set for arrays, so the proxy's target can be an array too */
+    array?: boolean
 }
 interface ValueFunction {
     type: 'function'
     ref: number
 }
 
-type Value = ValuePrimitive | ValueObject | ValueFunction
+/** numbers JSON can't carry: NaN, Infinity, -Infinity, -0 */
+interface ValueNumber {
+    type: 'number'
+    value: string
+}
+interface ValueBigInt {
+    type: 'bigint'
+    value: string
+}
+/** well-known symbols travel by name, registered ones (Symbol.for) by key, unique ones by id like objects */
+interface ValueSymbol {
+    type: 'symbol'
+    wellKnown?: string
+    key?: string
+    ref?: number
+    description?: string
+}
+
+type Value = ValuePrimitive | ValueNumber | ValueBigInt | ValueSymbol | ValueObject | ValueFunction
+
+/** a property key */
+type Key = string | ValueSymbol
 
 interface CommandGetRoot {
     type: 'root'
@@ -55,20 +62,39 @@ interface CommandUnrefMany {
 interface CommandPropertyGet {
     type: 'get'
     id: number
-    property: string
+    property: Key
 }
 
 interface CommandPropertySet {
     type: 'set'
     id: number
-    property: string
+    property: Key
     value: Value
+}
+
+interface CommandHas {
+    type: 'has'
+    id: number
+    property: Key
+}
+
+interface CommandDelete {
+    type: 'delete'
+    id: number
+    property: Key
+}
+
+interface CommandDefineProperty {
+    type: 'defineProperty'
+    id: number
+    property: Key
+    descriptor: mappedDescriptor
 }
 
 interface CommandPropertyGetDescriptor {
     type: 'getDescriptor'
     id: number
-    property: string
+    property: Key
 }
 
 interface CommandProperties {
@@ -99,6 +125,9 @@ type Command =
     CommandUnrefMany |
     CommandPropertyGet |
     CommandPropertySet |
+    CommandHas |
+    CommandDelete |
+    CommandDefineProperty |
     CommandPropertyGetDescriptor |
     CommandProperties |
     CommandConstruct |
@@ -143,12 +172,17 @@ interface mappedDescriptorVal {
 type mappedDescriptor = mappedDescriptorAcc | mappedDescriptorVal
 
 interface ResponsePropertyGetDescriptor {
-    descriptor: mappedDescriptor
+    descriptor: mappedDescriptor | null
+}
+
+interface ResponseBoolean {
+    result: boolean
 }
 
 interface ResponseProperties {
-    properties: string[]
-    preloadDescriptor: { [key: string ]: mappedDescriptor }
+    properties: Key[]
+    /** descriptors of `properties`, in the same order */
+    preloadDescriptor: mappedDescriptor[]
 }
 
 interface ResponseError {
@@ -168,6 +202,7 @@ type DomProxyResponse =
     ResponseUnref |
     ResponsePropertyGet |
     ResponsePropertySet |
+    ResponseBoolean |
     ResponsePropertyGetDescriptor |
     ResponseProperties |
     ResponseConstruct |
@@ -181,6 +216,7 @@ interface RpcSend {
     (target: number, command: CommandUnrefMany): ResponseUnref | ResponseError
     (target: number, command: CommandPropertyGet): ResponsePropertyGet | ResponseError
     (target: number, command: CommandPropertySet): ResponsePropertySet | ResponseError
+    (target: number, command: CommandHas | CommandDelete | CommandDefineProperty): ResponseBoolean | ResponseError
     (target: number, command: CommandPropertyGetDescriptor): ResponsePropertyGetDescriptor | ResponseError
     (target: number, command: CommandProperties): ResponseProperties | ResponseError
     (target: number, command: CommandConstruct): ResponseConstruct | ResponseError
@@ -195,6 +231,7 @@ type RpcSendWithThrow = {
     (target: number, command: CommandUnrefMany): ResponseUnref
     (target: number, command: CommandPropertyGet): ResponsePropertyGet
     (target: number, command: CommandPropertySet): ResponsePropertySet
+    (target: number, command: CommandHas | CommandDelete | CommandDefineProperty): ResponseBoolean
     (target: number, command: CommandPropertyGetDescriptor): ResponsePropertyGetDescriptor
     (target: number, command: CommandProperties): ResponseProperties
     (target: number, command: CommandConstruct): ResponseConstruct
