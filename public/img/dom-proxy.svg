@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>DOM Proxy</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#28344f"/>
+      <stop offset="1" stop-color="#131a29"/>
+    </linearGradient>
+    <radialGradient id="orangeInside">
+      <stop offset="0" stop-color="#ff9a1f" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ff9a1f" stop-opacity="0.5"/>
+    </radialGradient>
+    <radialGradient id="blueInside">
+      <stop offset="0" stop-color="#2ea8ff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#2ea8ff" stop-opacity="0.5"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <!-- a pencil pointing right, its axis on y = 0, the tip at x = 0 -->
+    <g id="pencil">
+      <rect x="-300" y="-29" width="212" height="58" fill="#ffc531"/>
+      <rect x="-300" y="-29" width="212" height="19" fill="#ffd96a"/>
+      <rect x="-300" y="10" width="212" height="19" fill="#e9a312"/>
+      <path d="M-88 -29 L0 0 L-88 29 Z" fill="#f6d9a8"/>
+      <path d="M-28 -9.2 L0 0 L-28 9.2 Z" fill="#2b2f3a"/>
+    </g>
+    <g id="pencilTail">
+      <rect x="0" y="-29" width="36" height="58" rx="12" fill="#ff7d93"/>
+      <rect x="26" y="-29" width="30" height="58" fill="#c4cad6"/>
+      <rect x="26" y="-29" width="30" height="19" fill="#e4e8ef"/>
+      <rect x="56" y="-29" width="300" height="58" fill="#ffc531"/>
+      <rect x="56" y="-29" width="300" height="19" fill="#ffd96a"/>
+      <rect x="56" y="10" width="300" height="19" fill="#e9a312"/>
+    </g>
+    <clipPath id="intoOrange"><rect x="0" y="0" width="176" height="512"/></clipPath>
+    <clipPath id="outOfBlue"><rect x="0" y="118" width="512" height="400"/></clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- glow -->
+  <g filter="url(#glow)" opacity="0.75">
+    <ellipse cx="176" cy="196" rx="40" ry="104" fill="none" stroke="#ff9a1f" stroke-width="22"/>
+    <ellipse cx="350" cy="118" rx="104" ry="36" fill="none" stroke="#2ea8ff" stroke-width="22"/>
+  </g>
+
+  <!-- the openings -->
+  <ellipse cx="176" cy="196" rx="40" ry="104" fill="url(#orangeInside)" stroke="#ffad42" stroke-width="15"/>
+  <ellipse cx="350" cy="118" rx="104" ry="36" fill="url(#blueInside)" stroke="#55b9ff" stroke-width="15"/>
+
+  <!-- into the orange portal, sideways -->
+  <g clip-path="url(#intoOrange)">
+    <use href="#pencilTail" transform="translate(44 196)"/>
+  </g>
+  <!-- out of the blue one, straight down onto the code -->
+  <g clip-path="url(#outOfBlue)">
+    <use href="#pencil" transform="translate(350 352) rotate(90)"/>
+  </g>
+
+  <!-- front rims, over the pencil -->
+  <path d="M176 92 A40 104 0 0 1 176 300" fill="none" stroke="#ffad42" stroke-width="15"/>
+  <path d="M246 118 A104 36 0 0 0 454 118" fill="none" stroke="#55b9ff" stroke-width="15"/>
+
+  <!-- </> -->
+  <g fill="none" stroke="#e8eefc" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M192 384 L150 418 L192 452"/>
+    <path d="M276 376 L236 460"/>
+    <path d="M320 384 L362 418 L320 452"/>
+  </g>
+</svg>
