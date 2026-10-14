@@ -3,7 +3,7 @@ Transparent rpc between web worker and mainland(the main page context)
 Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparent at the cost of halt the web worker and continue on operation finished with `Atomic.wait`.  
 
 ## Contents
-1. [Requirements](#Requirements-As-of-2019-06-25)
+1. [Requirements](#Requirements)
 2. [API](#API)
 3. [Example](#Example)
 4. [Explanation and caveats](#Explanation-and-caveats)
@@ -15,13 +15,11 @@ Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparen
 5. [Todos](#TODOS)
 
 
-## Requirements As of 2019-06-25
+## Requirements
 
-1. [Atomics.waitAsync (stage2)](https://github.com/tc39/proposal-atomics-wait-async)
-2. [WeakRef (stage3)](https://github.com/tc39/proposal-weakrefs)
-3. [FinalizationGroup (stage2)](https://github.com/tc39/proposal-weakrefs)
-
-You can try this with chromium(and its friends) 76+ with `--js-flags='--harmony-weak-refs'` flag from cli
+1. [SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) (the page must be [cross-origin isolated](https://developer.mozilla.org/en-US/docs/Web/API/Window/crossOriginIsolated))
+2. [WeakRef](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WeakRef) and [FinalizationRegistry](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry)
+3. [Atomics.waitAsync](https://github.com/tc39/proposal-atomics-wait-async) (`await-async.js` polyfills it)
 
 ## API
 - DOMProxy.create(`ia32`, `getRoot`) => `[[Payload Object]]`
@@ -162,14 +160,14 @@ So we make use of them.
 ++ map.set(id, new WeakRef(fakeObject))
 ```
 
-2. The worker use the `FinalizationGroup` to track when will the garbage collection could happen (no one is holding the proxy anymore).  
+2. The worker use the `FinalizationRegistry` to track when will the garbage collection could happen (no one is holding the proxy anymore).  
    And send the event to mainland.
 
 ```js
 // mainland
 
 // worker
-const cleaner = new FinalizationGroup(id => {
+const cleaner = new FinalizationRegistry(id => {
     // remove the cache from entry
     map.delete(id)
     tellTheMainlandToDropTheRef(id)
@@ -193,9 +191,10 @@ findIdInMapAndDropIt(map, id)
 1. Due to the lack of native `Atomic.asyncAwait`, polyfill is used, the operation is actually far more expensive then it should (each call cost about 0.5ms).
 
    This means calls like `Object.keys(fakeObject)` will be very slow because it requires to call `getOwnPropertyDescriptor` on every single property (call it on `window` will result in about 200 requests).
-2. Due to the `FinalizationGroup` and `WeakRef` isn't ship on all stable browser version.
+2. Garbage collection relies on `WeakRef` and `FinalizationRegistry`, which can't be polyfilled.
 
-   It isn't possible to use this library without edit the browser setting from cli directly currently. (that's why this is a POC, WeakRef can't be polyfilled at all)
+## Tests
+`npm test` runs the rpc and proxy layers with real Node.js worker threads (Node 22+); the main thread plays the page, with `Atomics.wait` disabled as in a browser window.
 
 ## TODOS
 1. Mapping symbol between workers (current throws)

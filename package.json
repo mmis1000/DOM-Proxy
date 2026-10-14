@@ -4,7 +4,7 @@
   "description": "Transparent rpc between web worker and mainland(the main page context)   Looks like [via.js](https://github.com/AshleyScirra/via.js), But more transparent at the cost of halt the web worker and continue on operation finished with `Atomic.wait`.",
   "main": "dom-proxy.js",
   "scripts": {
-    "test": "node --test test/rpc.test.js"
+    "test": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",

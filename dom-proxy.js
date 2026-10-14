@@ -124,18 +124,40 @@ globalThis.DomProxy = {
         }
     
         /**
-         * @type {FinalizationGroup<any, any, number>}
+         * ids of collected proxies, waiting to be unref'd in one batch
+         * @type {number[]}
          */
-        const cleaner = new FinalizationGroup(iter => {
+        const collectedIds = []
+
+        function flushCollected() {
+            const ids = collectedIds.splice(0)
+
             batchUnref(() => {
-                for (let id of iter) {
-                    remoteIdToObject.delete(id)
+                for (let id of ids) {
+                    // the id may have been fetched again (and got a new proxy) after the old one was collected
+                    const ref = remoteIdToObject.get(id)
+                    if (ref && ref.deref() === undefined) {
+                        remoteIdToObject.delete(id)
+                    }
+
+                    // every proxy took one ref when created, so every collected proxy gives one back
                     unrefRemote(id)
                 }
             })
+        }
+
+        /**
+         * FinalizationRegistry calls back once per collected proxy, batch them up
+         * @type {FinalizationRegistry<number>}
+         */
+        const cleaner = new FinalizationRegistry(id => {
+            if (collectedIds.length === 0) {
+                setTimeout(flushCollected, 0)
+            }
+            collectedIds.push(id)
         })
         
-        DomProxy.__finalizationGroups.push(cleaner)
+        DomProxy.__finalizationRegistries.push(cleaner)
     
 
         let bufferingRefs = false
@@ -195,7 +217,7 @@ globalThis.DomProxy = {
                 }
 
                 for (let entry of mapByTarget) {
-                    return rpcSendMayThrow(entry[0], {
+                    rpcSendMayThrow(entry[0], {
                         type: "ref-many",
                         ids: entry[1]
                     })
@@ -259,7 +281,7 @@ globalThis.DomProxy = {
                 }
 
                 for (let entry of mapByTarget) {
-                    return rpcSendMayThrow(entry[0], {
+                    rpcSendMayThrow(entry[0], {
                         type: "unref-many",
                         ids: entry[1]
                     })
@@ -281,7 +303,8 @@ globalThis.DomProxy = {
         function getObjectFromId(id, type = "object") {
             if (isRemoteId(id)) {
                 const ref = remoteIdToObject.get(id)
-                if (!ref) {
+                const existing = ref && ref.deref()
+                if (existing === undefined) {
                     if (type === null) {
                         throw new Error('unknown id')
                     }
@@ -381,11 +404,11 @@ globalThis.DomProxy = {
                     
                     remoteIdToObject.set(id, new WeakRef(proxy))
                     remoteObjectToId.set(proxy, id)
-                    cleaner.register(proxy, id, proxy)
+                    cleaner.register(proxy, id)
                     return proxy
                 }
 
-                return ref.deref()
+                return existing
             } else {
                 return selfIdToItem.get(id)
             }
@@ -662,5 +685,6 @@ globalThis.DomProxy = {
             getRemote: getRemoteRoot
         }
     },
-    __finalizationGroups: /** @type { FinalizationGroup<any, any, number>[] } */([])
+    // keeps the registries alive, a collected registry never calls back
+    __finalizationRegistries: /** @type { FinalizationRegistry<number>[] } */([])
 }

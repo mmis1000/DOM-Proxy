@@ -1,19 +1,3 @@
-declare class WeakRef<T> {
-    constructor (val: T)
-    deref(): T|undefined
-}
-
-/**
- * @template T Value
- * @template U Unregister token
- * @template V Holding value
- */
-declare class FinalizationGroup<T, U, V> {
-    constructor (cb: (iter: Iterable<V>)=>void)
-    register(target: T, holding: V, token: U): void
-    unregister(token: U): void
-}
-
 interface ValuePrimitive {
     type: 'primitive'
     value: null | undefined | boolean | number | string
